@@ -96,7 +96,7 @@ void main() {
 
   group('LlamaContextInferenceConfig', () {
     test('默认配置应该有合理的值', () {
-      const config = LlamaContextInferenceConfig();
+      const config = InferenceConfig();
       expect(config.nCtx, equals(4096));
       expect(config.nBatch, equals(512));
       expect(config.nThreads, equals(4));
@@ -104,7 +104,7 @@ void main() {
 
     test('采样配置应该正确传递', () {
       const sampling = SamplingConfig(temperature: 0.8);
-      const config = LlamaContextInferenceConfig(sampling: sampling);
+      const config = InferenceConfig(sampling: sampling);
       expect(config.sampling.temperature, equals(0.8));
     });
   });
