@@ -1,5 +1,6 @@
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:llama_native/llama_native_bindings.dart' as bindings;
 import 'package:llama_native/src/backend/llama_backend.dart';
@@ -206,17 +207,88 @@ class LlamaModel with Disposable {
     return fileName.replaceAll('.gguf', '');
   }
 
-  /// Tokenize 文本 (简化实现)
+  /// Tokenize 文本
   List<int> tokenize(String text, {bool addBos = true, bool addEos = false}) {
-    // 简化实现：返回字符 codes 作为占位符
-    return text.codeUnits.take(10).toList();
+    if (_disposed) throw StateError('Model is disposed');
+
+    final textC = text.toNativeUtf8().cast<Char>();
+    try {
+      // 先获取所需的 token 数量
+      final maxTokens = text.length + (addBos ? 1 : 0) + (addEos ? 1 : 0);
+      final tokens = calloc<Int32>(maxTokens);
+
+      try {
+        final n = bindings.llama_tokenize(
+          vocab,
+          textC,
+          text.length,
+          tokens,
+          maxTokens,
+          addBos,
+          false, // parse_special
+        );
+
+        if (n < 0) {
+          throw LlamaTokenizeException('Tokenization failed for text: $text');
+        }
+
+        // 转换为 Dart List
+        final result = <int>[];
+        for (var i = 0; i < n; i++) {
+          result.add(tokens.elementAt(i).value);
+        }
+        return result;
+      } finally {
+        calloc.free(tokens);
+      }
+    } finally {
+      calloc.free(textC);
+    }
   }
 
-  /// Detokenize 回文本 (简化实现)
+  /// Detokenize 回文本
   String detokenize(List<int> tokens) {
+    if (_disposed) throw StateError('Model is disposed');
     if (tokens.isEmpty) return '';
-    // 简化实现
-    return tokens.map((t) => String.fromCharCode(t % 256)).join();
+
+    final buffer = StringBuffer();
+
+    for (final token in tokens) {
+      // 先获取所需缓冲区大小
+      final bufferSize = bindings.llama_token_to_piece(
+        vocab,
+        token,
+        nullptr,
+        0,
+        0, // lstrip
+        false, // special
+      );
+
+      if (bufferSize <= 0) continue;
+
+      // 分配缓冲区并获取文本
+      final pieceBuffer = calloc<Char>(bufferSize);
+      try {
+        final actualSize = bindings.llama_token_to_piece(
+          vocab,
+          token,
+          pieceBuffer,
+          bufferSize,
+          0, // lstrip
+          false, // special
+        );
+
+        if (actualSize > 0) {
+          // 转换为 Dart 字符串
+          final stringBytes = Uint8List.fromList(List.generate(actualSize, (i) => pieceBuffer.elementAt(i).value));
+          buffer.write(String.fromCharCodes(stringBytes));
+        }
+      } finally {
+        calloc.free(pieceBuffer);
+      }
+    }
+
+    return buffer.toString();
   }
 
   @override

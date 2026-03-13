@@ -90,8 +90,7 @@ class SessionState implements Disposable {
     };
 
     // 转换为 JSON 并编码
-    // 实际实现应使用更高效的二进制格式
-    final jsonStr = data.toString(); // 简化实现
+    final jsonStr = jsonEncode(data);
     _serializedData = Uint8List.fromList(jsonStr.codeUnits);
 
     _logger.debug('Serialized to ${_serializedData!.length} bytes');
@@ -100,12 +99,25 @@ class SessionState implements Disposable {
 
   /// 从字节反序列化
   static Future<SessionState> deserialize(Uint8List data) async {
-    final session = SessionState();
-
     try {
-      // 解析数据 (简化实现)
-      session._serializedData = data;
+      // 解析 JSON
+      final jsonStr = String.fromCharCodes(data);
+      final parsed = jsonDecode(jsonStr) as Map<String, dynamic>;
 
+      // 创建会话状态
+      final session = SessionState(
+        sessionId: parsed['session_id'] as String,
+        createdAt: DateTime.parse(parsed['created_at'] as String),
+      );
+
+      // 恢复 KV Cache 快照
+      final nPast = parsed['n_past'] as int;
+      final keepPrefix = parsed['keep_prefix'] as int;
+      final cacheData = base64Decode(parsed['data'] as String);
+
+      session._cacheSnapshot = KVCacheSnapshot(nPast: nPast, keepPrefix: keepPrefix, windowSize: null, data: cacheData);
+
+      session._serializedData = data;
       return session;
     } catch (e) {
       throw LlamaSessionStateException('Failed to deserialize: $e');

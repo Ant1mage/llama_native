@@ -42,13 +42,13 @@ class ChatMessage {
   const ChatMessage({required this.role, required this.content});
 
   /// 创建系统消息
-  const ChatMessage.system(String content) : role = MessageRole.system, content = content;
+  const ChatMessage.system(this.content) : role = MessageRole.system;
 
   /// 创建用户消息
-  const ChatMessage.user(String content) : role = MessageRole.user, content = content;
+  const ChatMessage.user(this.content) : role = MessageRole.user;
 
   /// 创建助手消息
-  const ChatMessage.assistant(String content) : role = MessageRole.assistant, content = content;
+  const ChatMessage.assistant(this.content) : role = MessageRole.assistant;
 }
 
 /// 协议适配器
@@ -157,12 +157,14 @@ class ChatTokenizer {
     final buffer = StringBuffer();
 
     for (final msg in messages) {
-      final role = msg.role == MessageRole.user ? 'user' : 'assistant';
-      buffer.write('\n\n$role:$msg.content');
+      final role = msg.role.name;
+      buffer.write('<|im_start|>$role\n');
+      buffer.write(msg.content.trim());
+      buffer.write('<|im_end|>');
     }
 
     // 添加助手前缀
-    buffer.write('\n\nassistant:');
+    buffer.write('<|im_start|>assistant\n');
 
     return buffer.toString();
   }

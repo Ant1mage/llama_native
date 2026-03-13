@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:ffi';
 import 'dart:io';
-import 'package:llama_native/src/context/inference_config.dart';
-import 'package:llama_native/src/context/token_generation.dart';
+import 'dart:typed_data';
+import 'package:ffi/ffi.dart';
 
 import 'package:llama_native/llama_native_bindings.dart' as bindings;
 import 'package:llama_native/src/backend/llama_backend.dart';
 import 'package:llama_native/src/model/llama_model.dart';
+import 'package:llama_native/src/context/inference_config.dart';
+import 'package:llama_native/src/context/token_generation.dart';
 import 'package:llama_native/src/sampling/sampling_config.dart';
 import 'package:llama_native/src/cache/kv_cache_manager.dart';
 import 'package:llama_native/src/logging/logger.dart';
@@ -81,11 +84,12 @@ class LlamaContext with Disposable {
   Stream<TokenGeneration> generateStream(List<int> inputTokens, {int maxTokens = 256}) async* {
     if (_disposed) throw StateError('Context is disposed');
 
-    final tokens = List<int>.from(inputTokens);
+    // 首先处理输入 tokens
+    _processTokens(inputTokens);
 
     for (var i = 0; i < maxTokens; i++) {
       // 生成下一个 token
-      final result = _generateNextSync(tokens);
+      final result = _generateNextSync();
 
       yield result;
 
@@ -94,20 +98,86 @@ class LlamaContext with Disposable {
       }
 
       // 使用生成的 token 继续
-      tokens.clear();
-      tokens.add(result.token);
+      _processTokens([result.token]);
+    }
+  }
+
+  /// 处理 tokens 并更新 KV cache
+  void _processTokens(List<int> tokens) {
+    if (tokens.isEmpty) return;
+
+    // 分配并初始化 token 数组
+    final tokenArray = calloc<Int32>(tokens.length);
+    for (var i = 0; i < tokens.length; i++) {
+      tokenArray[i] = tokens[i];
+    }
+
+    try {
+      // 使用 llama_batch_get_one 获取 batch
+      final batch = bindings.llama_batch_get_one(tokenArray, tokens.length);
+
+      // 设置位置
+      for (var i = 0; i < tokens.length; i++) {
+        batch.pos.elementAt(i).value = _nPast + i;
+      }
+
+      // 解码批次
+      final result = bindings.llama_decode(handle, batch);
+      if (result < 0) {
+        _logger.error('llama_decode failed with code $result');
+        throw LlamaContextInitException('Failed to decode batch');
+      }
+
+      _nPast += tokens.length;
+      _kvCache?.addProcessed(tokens.length);
+
+      // 释放 batch
+      bindings.llama_batch_free(batch);
+    } finally {
+      calloc.free(tokenArray);
     }
   }
 
   /// 同步生成单个 token
-  TokenGeneration _generateNextSync(List<int> tokens) {
+  TokenGeneration _generateNextSync() {
     if (_disposed) throw StateError('Context is disposed');
 
-    final lastToken = tokens.last;
-    final text = _model.detokenize([lastToken]);
-    final eosToken = bindings.llama_token_eos(_model.vocab);
+    final vocabHandle = _model.vocab;
+    const eosTokenId = 2; // 默认 EOS token ID，实际应该从 vocab 获取
 
-    return TokenGeneration(token: lastToken, text: text, isEnd: lastToken == eosToken);
+    // 获取 logits (最后一个 token 的)
+    final logits = bindings.llama_get_logits_ith(handle, _nPast - 1);
+
+    if (logits == nullptr) {
+      throw LlamaContextInitException('Failed to get logits');
+    }
+
+    // 应用采样
+    final sampledToken = _sampleFromLogits(logits, vocabHandle);
+
+    // detokenize
+    final text = _model.detokenize([sampledToken]);
+
+    return TokenGeneration(token: sampledToken, text: text, isEnd: sampledToken == eosTokenId);
+  }
+
+  /// 从 logits 采样 token (简化实现 - greedy sampling)
+  int _sampleFromLogits(Pointer<Float> logits, Pointer<bindings.llama_vocab> vocab) {
+    final vocabSize = bindings.llama_n_vocab(vocab);
+
+    double maxLogit = double.negativeInfinity;
+    int maxIndex = 0;
+
+    // 简单的 greedy sampling (选择最大概率的 token)
+    for (var i = 0; i < vocabSize; i++) {
+      final logit = logits.elementAt(i).value;
+      if (logit > maxLogit) {
+        maxLogit = logit;
+        maxIndex = i;
+      }
+    }
+
+    return maxIndex;
   }
 
   /// 重置上下文
