@@ -1,92 +1,140 @@
-# llama_native
+# Llama Native
 
-A new Flutter FFI plugin project.
+Flutter FFI 插件，提供 llama.cpp 的全平台 Dart 封装。
 
-## Getting Started
+## 特性
 
-This project is a starting point for a Flutter
-[FFI plugin](https://flutter.dev/to/ffi-package),
-a specialized package that includes native code directly invoked with Dart FFI.
+- 🚀 **全平台支持**: Android, iOS, macOS, Linux, Windows
+- 📦 **高级 API**: 简洁易用的 Dart 接口
+- 🔧 **CMake 构建**: 自动编译 llama.cpp
+- 💬 **对话支持**: ChatTokenizer 和会话管理
+- ⚡ **流式生成**: 实时 token 输出
 
-## Project structure
+## 快速开始
 
-This template uses the following structure:
-
-* `src`: Contains the native source code, and a CmakeFile.txt file for building
-  that source code into a dynamic library.
-
-* `lib`: Contains the Dart code that defines the API of the plugin, and which
-  calls into the native code using `dart:ffi`.
-
-* platform folders (`android`, `ios`, `windows`, etc.): Contains the build files
-  for building and bundling the native code library with the platform application.
-
-## Building and bundling native code
-
-The `pubspec.yaml` specifies FFI plugins as follows:
+### 1. 添加依赖
 
 ```yaml
-  plugin:
-    platforms:
-      some_platform:
-        ffiPlugin: true
+dependencies:
+  llama_native: ^0.0.1
 ```
 
-This configuration invokes the native build for the various target platforms
-and bundles the binaries in Flutter applications using these FFI plugins.
+### 2. 基础使用
 
-This can be combined with dartPluginClass, such as when FFI is used for the
-implementation of one platform in a federated plugin:
+```dart
+import 'package:llama_native/llama_native.dart';
 
-```yaml
-  plugin:
-    implements: some_other_plugin
-    platforms:
-      some_platform:
-        dartPluginClass: SomeClass
-        ffiPlugin: true
+// 初始化后端
+final backend = LlamaBackend.instance;
+await backend.initialize();
+
+// 加载模型
+final model = LlamaModel.load(
+  LlamaModelConfig(modelPath: 'path/to/model.gguf')
+);
+
+// 创建推理配置
+final config = InferenceConfig.defaultMacOS();
+
+// 创建上下文
+final context = LlamaContext.create(model, config);
+
+// 流式生成
+final stream = context.generateStream(tokens, maxTokens: 256);
+await for (final result in stream) {
+  print(result.text);
+}
+
+// 清理资源
+context.dispose();
+model.dispose();
+backend.dispose();
 ```
 
-A plugin can have both FFI and method channels:
+### 3. 对话示例
 
-```yaml
-  plugin:
-    platforms:
-      some_platform:
-        pluginClass: SomeName
-        ffiPlugin: true
+```dart
+// 初始化 ChatTokenizer
+final tokenizer = ChatTokenizer(
+  model: model,
+  templateType: ChatTemplateType.qwen,
+  addBos: true,
+);
+
+// 构建对话
+final messages = [
+  const ChatMessage.system('你是一个 AI 助手'),
+  const ChatMessage.user('你好'),
+];
+
+// Tokenize
+final tokens = tokenizer.tokenizeMessages(messages);
+
+// 生成回复
+final response = await context.generate(tokens);
 ```
 
-The native build systems that are invoked by FFI (and method channel) plugins are:
+## 核心模块
 
-* For Android: Gradle, which invokes the Android NDK for native builds.
-  * See the documentation in android/build.gradle.
-* For iOS and MacOS: Xcode, via CocoaPods.
-  * See the documentation in ios/llama_native.podspec.
-  * See the documentation in macos/llama_native.podspec.
-* For Linux and Windows: CMake.
-  * See the documentation in linux/CMakeLists.txt.
-  * See the documentation in windows/CMakeLists.txt.
+| 模块 | 说明 |
+|------|------|
+| `LlamaBackend` | 后端初始化管理 |
+| `LlamaModel` | 模型加载与配置 |
+| `LlamaContext` | 推理执行引擎 |
+| `InferenceConfig` | 推理参数配置 |
+| `ChatTokenizer` | Chat Template 处理 |
+| `KVCacheManager` | KV Cache 管理 |
+| `SessionManager` | 会话状态管理 |
+| `SamplingConfig` | 采样策略配置 |
 
-## Binding to native code
+## 构建说明
 
-To use the native code, bindings in Dart are needed.
-To avoid writing these by hand, they are generated from the header file
-(`src/llama_native.h`) by `package:ffigen`.
-Regenerate the bindings by running `dart run ffigen --config ffigen.yaml`.
+### 前置要求
 
-## Invoking native code
+- Flutter SDK >= 3.3.0
+- Dart SDK >= 3.11.1
+- CMake 3.22+
+- C++ 编译器
 
-Very short-running native functions can be directly invoked from any isolate.
-For example, see `sum` in `lib/llama_native.dart`.
+### 编译 llama.cpp
 
-Longer-running functions should be invoked on a helper isolate to avoid
-dropping frames in Flutter applications.
-For example, see `sumAsync` in `lib/llama_native.dart`.
+```bash
+# 构建原生库
+dart run hook/build.dart
+```
 
-## Flutter help
+### 运行示例
 
-For help getting started with Flutter, view our
-[online documentation](https://docs.flutter.dev), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```bash
+cd example
+flutter pub get
+dart run lib/main.dart
+```
 
+## 项目结构
+
+```
+lib/
+├── llama_native.dart          # 主入口
+├── llama_native_bindings.dart # FFI 绑定
+└── src/
+    ├── backend/               # 后端管理
+    ├── model/                 # 模型加载
+    ├── context/               # 推理上下文
+    ├── tokenizer/             # Tokenizer
+    ├── cache/                 # KV Cache
+    ├── session/               # 会话管理
+    ├── sampling/              # 采样配置
+    └── utils/                 # 工具类
+```
+
+## 注意事项
+
+- 模型文件需为 GGUF 格式
+- 首次运行需要编译 llama.cpp（可能需要几分钟）
+- 移动端建议量化模型（Q4_K_M 或更低精度）
+- 确保有足够的内存（模型大小 × 1.2）
+
+## License
+
+MIT License

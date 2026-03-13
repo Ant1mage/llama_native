@@ -143,11 +143,10 @@ class LlamaModel with Disposable {
     return _modelPtr!;
   }
 
-  /// 获取词表指针 (简化实现)
+  /// 获取词表指针
   Pointer<bindings.llama_vocab> get vocab {
-    // 简化实现：将模型指针转换为词表指针
-    // 实际应该调用 llama_model_get_vocab
-    return handle.cast<bindings.llama_vocab>();
+    // 使用 llama_model_get_vocab 获取词表指针
+    return bindings.llama_model_get_vocab(handle);
   }
 
   /// 获取模型元数据
