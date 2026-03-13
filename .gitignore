@@ -17,6 +17,8 @@ migrate_working_dir/
 *.ipr
 *.iws
 .idea/
+.lingma/
+.vscode/
 
 # The .vscode folder contains launch configuration and tasks you configure in
 # VS Code which you may wish to be included in version control, so this line
@@ -31,3 +33,23 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 /build/
 /coverage/
+
+# Model files (large binaries)
+/models/
+*.gguf
+
+# Generated plugin registrants
+**/GeneratedPluginRegistrant.java
+**/GeneratedPluginRegistrant.swift
+**/generated_plugin_registrant.cc
+**/generated_plugin_registrant.h
+**/generated_plugins.cmake
+
+# iOS/macOS generated files
+**/Podfile
+**/Pods/
+**/*.xcconfig
+
+# Build artifacts
+**/.cxx/
+**/cmake_build/

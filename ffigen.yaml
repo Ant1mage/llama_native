@@ -1,15 +1,51 @@
 # Run with `dart run ffigen --config ffigen.yaml`.
 name: LlamaNativeBindings
 description: |
-  Bindings for `src/llama_native.h`.
+  Bindings for llama.cpp library.
 
   Regenerate bindings with `dart run ffigen --config ffigen.yaml`.
+
 output: 'lib/llama_native_bindings_generated.dart'
 headers:
   entry-points:
-    - 'src/llama_native.h'
+    - 'src/llama.cpp/include/llama.h'
   include-directives:
-    - 'src/llama_native.h'
+    - 'src/llama.cpp/include/llama.h'
 comments:
   style: any
   length: full
+preamble: |
+  // ignore_for_file: always_specify_types, camel_case_types, non_constant_identifier_names, unused_field, unused_element
+
+compiler-opts:
+  - '-Isrc/llama.cpp/include'
+  - '-Isrc/llama.cpp/ggml/include'
+
+structs:
+  include:
+    - 'llama_.*'
+    - 'ggml_.*'
+    - 'gguf_.*'
+  exclude:
+    - 'llama_cpp_global_context'
+
+functions:
+  include:
+    - 'llama_.*'
+    - 'ggml_.*'
+    - 'gguf_.*'
+  exclude:
+    - 'llama_cpp_global_context_init'
+    - 'llama_cpp_global_context_get'
+
+enums:
+  include:
+    - 'llama_.*'
+    - 'ggml_.*'
+    - 'gguf_.*'
+
+macros:
+  include:
+    - 'LLAMA_.*'
+    - 'GGML_.*'
+    - 'GGUF_.*'
