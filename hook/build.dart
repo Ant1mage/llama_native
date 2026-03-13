@@ -172,11 +172,11 @@ void main(List<String> args) async {
         'src/llama.cpp/ggml/src/gguf.cpp',
 
         // CPU backend (必需，作为后备)
+        'src/llama.cpp/ggml/src/ggml-cpu/ggml-cpu.c',
         'src/llama.cpp/ggml/src/ggml-cpu/ggml-cpu.cpp',
-        'src/llama.cpp/ggml/src/ggml-cpu/ggml-cpu-aarch64.cpp',
-        'src/llama.cpp/ggml/src/ggml-cpu/ggml-cpu-quants.c',
-        'src/llama.cpp/ggml/src/ggml-cpu/ggml-cpu-hbm.cpp',
-        'src/llama.cpp/ggml/src/ggml-cpu/ggml-cpu-traits.cpp',
+        'src/llama.cpp/ggml/src/ggml-cpu/quants.c',
+        'src/llama.cpp/ggml/src/ggml-cpu/hbm.cpp',
+        'src/llama.cpp/ggml/src/ggml-cpu/traits.cpp',
       ];
 
       // 合并所有源文件
@@ -215,9 +215,6 @@ void main(List<String> args) async {
           ...gpuDefines,
         },
         flags: [
-          // ========== C++ 标准 ==========
-          '-std=c++17',
-
           // ========== 优化标志 ==========
           // 通用优化
           '-O3', // 最高级别优化
