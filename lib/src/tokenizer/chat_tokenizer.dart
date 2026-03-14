@@ -167,14 +167,19 @@ class ChatTokenizer {
       final chatMessages = _toNativeChatMessages(messages);
 
       try {
-        // 估算缓冲区大小（推荐 2 * 总字符数）
+        // 估算缓冲区大小（多字节字符 *4 保险）
         final totalChars = messages.fold<int>(0, (sum, msg) => sum + msg.content.length);
-        final bufferSize = (totalChars * 2).clamp(1024, 1024 * 1024);
-        final buffer = calloc<Char>(bufferSize);
+        var bufferSize = (totalChars * 4).clamp(1024, 1024 * 1024);
+        var buffer = calloc<Char>(bufferSize);
+
+        // 将模型内置 template 名称传给 llama_chat_apply_template
+        // 第一个参数是 Jinja 模板字符串（或 nullptr 使用默认）
+        // 注意：该 API 接受的是模板名或模板内容字符串，而不是模型指针
+        final tmplPtr = _modelTemplate != null ? _modelTemplate!.toNativeUtf8().cast<Char>() : nullptr.cast<Char>();
 
         try {
-          final result = bindings.llama_chat_apply_template(
-            nullptr, // 使用模型默认 template
+          var result = bindings.llama_chat_apply_template(
+            tmplPtr,
             chatMessages,
             messages.length,
             true, // add_ass
@@ -182,27 +187,35 @@ class ChatTokenizer {
             bufferSize,
           );
 
-          if (result > 0 && result <= bufferSize) {
-            final formattedText = buffer.cast<Utf8>().toDartString(length: result);
-            _logger.debug('Applied native template: $formattedText');
-            return formattedText;
-          } else if (result > bufferSize) {
-            _logger.warning('Buffer too small, need $result bytes');
-            // 重新分配更大的缓冲区
+          if (result > bufferSize) {
+            // 缓冲区不够，重新分配后再调用一次
             calloc.free(buffer);
-            final newBuffer = calloc<Char>(result);
-            try {
-              bindings.llama_chat_apply_template(nullptr, chatMessages, messages.length, true, newBuffer, result);
-              return newBuffer.cast<Utf8>().toDartString(length: result);
-            } finally {
-              calloc.free(newBuffer);
-            }
+            bufferSize = result + 1;
+            buffer = calloc<Char>(bufferSize);
+
+            result = bindings.llama_chat_apply_template(
+              tmplPtr,
+              chatMessages,
+              messages.length,
+              true,
+              buffer,
+              bufferSize,
+            );
+          }
+
+          if (result > 0) {
+            final formattedText = buffer.cast<Utf8>().toDartString(length: result);
+            _logger.debug('Applied native template, length=$result');
+            return formattedText;
           } else {
             _logger.error('Failed to apply template, result: $result');
             return _applyFallbackTemplate(messages);
           }
         } finally {
           calloc.free(buffer);
+          if (_modelTemplate != null) {
+            calloc.free(tmplPtr);
+          }
         }
       } finally {
         _freeChatMessages(chatMessages, messages.length);

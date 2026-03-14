@@ -26,7 +26,10 @@ class InferenceConfig {
   factory InferenceConfig.defaultMacOS() {
     return InferenceConfig(
       nCtx: 4096,
-      nBatch: 512,
+      // n_batch 控制单次 prefill 批大小，过大会触发 Metal GPU watchdog timeout
+      // Metal 对单个 command buffer 执行时间有限制（约数秒）
+      // 64 是在 Apple Silicon 上安全的保守值
+      nBatch: 64,
       nThreads: Platform.numberOfProcessors,
       sampling: const SamplingConfig(temperature: 0.7, topP: 0.9),
     );
@@ -66,7 +69,7 @@ class InferenceConfig {
   factory InferenceConfig.defaultIOS() {
     return InferenceConfig(
       nCtx: 2048,
-      nBatch: 256,
+      nBatch: 32, // iOS Metal watchdog 更严格
       nThreads: Platform.numberOfProcessors.clamp(2, 4),
       sampling: const SamplingConfig(temperature: 0.7, topP: 0.9),
     );

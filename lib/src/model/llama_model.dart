@@ -211,25 +211,27 @@ class LlamaModel with Disposable {
   List<int> tokenize(String text, {bool addBos = true, bool addEos = false}) {
     if (_disposed) throw StateError('Model is disposed');
 
-    final textC = text.toNativeUtf8().cast<Char>();
+    // 必须用 UTF-8 字节长度，Dart String.length 是 UTF-16 码元数，对多字节字符会偏小
+    final textC = text.toNativeUtf8();
+    final textByteLen = textC.length; // Utf8Pointer.length 返回字节数
     try {
-      // 先获取所需的 token 数量
-      final maxTokens = text.length + (addBos ? 1 : 0) + (addEos ? 1 : 0);
+      // 最大 token 数：UTF-8 字节数 + BOS/EOS 各1
+      final maxTokens = textByteLen + (addBos ? 1 : 0) + (addEos ? 1 : 0) + 1;
       final tokens = calloc<Int32>(maxTokens);
 
       try {
         final n = bindings.llama_tokenize(
           vocab,
-          textC,
-          text.length,
+          textC.cast<Char>(),
+          textByteLen,
           tokens,
           maxTokens,
           addBos,
-          false, // parse_special
+          true, // parse_special: 解析特殊 token（如 <|im_start|> 等）
         );
 
         if (n < 0) {
-          throw LlamaTokenizeException('Tokenization failed for text: $text');
+          throw LlamaTokenizeException('Tokenization failed for text: $text (code=$n)');
         }
 
         // 转换为 Dart List
