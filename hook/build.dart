@@ -1,10 +1,8 @@
 import 'dart:io';
-import 'package:archive/archive_io.dart';
 import 'package:code_assets/code_assets.dart';
 import 'package:hooks/hooks.dart';
 import 'package:path/path.dart' as p;
 
-/// 平台信息配置
 class PlatformConfig {
   final String os;
   final String arch;
@@ -21,36 +19,28 @@ void main(List<String> args) async {
 
     print('\n🚀 ========== 开始构建 llama_native ==========');
 
-    // 1. 读取版本号
     final llamaCppVersion = getLlamaCppVersion(packageRoot);
 
-    // 2. 切换 llama.cpp 到指定版本
     print('\n📋 步骤 1: 切换 llama.cpp 版本');
     await checkoutLlamaCppVersion(packageRoot, llamaCppVersion);
 
-    // 3. 生成 ffigen 绑定
     print('\n📋 步骤 2: 生成 FFI 绑定');
     await runFfigen(packageRoot);
 
-    // Web 平台不支持
     if (targetOS == 'web') {
       print('⚠️  Web 平台不支持，跳过');
       return;
     }
 
-    // 判断是否为模拟器
     bool isSimulator = false;
     if (targetOS == 'ios') {
-      isSimulator = targetArch == 'x86_64';
+      isSimulator = input.config.code.iOS.targetSdk == IOSSdk.iPhoneSimulator;
     }
 
-    // 创建平台配置
     final platformConfig = PlatformConfig(os: targetOS, arch: targetArch, isSimulator: isSimulator);
 
-    // 处理该平台
     final libFile = await processPlatform(platformConfig, packageRoot, llamaCppVersion);
 
-    // 注册资产
     output.assets.code.add(
       CodeAsset(package: 'llama_native', name: 'llama_native', linkMode: DynamicLoadingBundled(), file: libFile.uri),
     );
@@ -59,16 +49,13 @@ void main(List<String> args) async {
   });
 }
 
-/// 从 pubspec.yaml 读取 llama.cpp 版本号
 String getLlamaCppVersion(String packageRoot) {
-  // 方式 1: 从环境变量读取（CI/CD 时使用）
   final envVersion = Platform.environment['LLAMA_CPP_VERSION'];
   if (envVersion != null && envVersion.isNotEmpty) {
     print('📌 使用环境变量 LLAMA_CPP_VERSION: $envVersion');
     return envVersion;
   }
 
-  // 方式 2: 从 pubspec.yaml 读取
   try {
     final pubspecFile = File(p.join(packageRoot, 'pubspec.yaml'));
     if (pubspecFile.existsSync()) {
@@ -89,12 +76,10 @@ String getLlamaCppVersion(String packageRoot) {
     print('⚠️  读取 pubspec.yaml 失败：$e');
   }
 
-  // 默认版本号
   print('⚠️  未找到 llama_cpp_version，使用默认值：b8369');
   return 'b8369';
 }
 
-/// 切换 llama.cpp 到指定版本
 Future<void> checkoutLlamaCppVersion(String packageRoot, String version) async {
   final llamaCppDir = Directory(p.join(packageRoot, 'src', 'llama.cpp'));
 
@@ -105,14 +90,12 @@ Future<void> checkoutLlamaCppVersion(String packageRoot, String version) async {
   print('🔄 准备切换 llama.cpp 到版本：$version');
 
   try {
-    // 检查是否是 git 仓库
     final gitDir = Directory(p.join(llamaCppDir.path, '.git'));
     if (!gitDir.existsSync()) {
       print('⚠️  llama.cpp 不是 git 仓库，跳过版本切换');
       return;
     }
 
-    // 执行 git checkout
     print('📍 正在执行 git checkout $version');
     final checkoutResult = await Process.run(
       'git',
@@ -125,7 +108,6 @@ Future<void> checkoutLlamaCppVersion(String packageRoot, String version) async {
       print('⚠️  git checkout 失败：${checkoutResult.stderr}');
       print('ℹ️  尝试先拉取最新代码...');
 
-      // 尝试先拉取
       final pullResult = await Process.run(
         'git',
         ['fetch', 'origin'],
@@ -134,7 +116,6 @@ Future<void> checkoutLlamaCppVersion(String packageRoot, String version) async {
       );
 
       if (pullResult.exitCode == 0) {
-        // 再次尝试 checkout
         final retryResult = await Process.run(
           'git',
           ['checkout', version],
@@ -152,7 +133,6 @@ Future<void> checkoutLlamaCppVersion(String packageRoot, String version) async {
 
     print('✅ 成功切换到 llama.cpp 版本：$version');
 
-    // 初始化子模块
     print('📦 初始化子模块...');
     final submoduleResult = await Process.run(
       'git',
@@ -172,7 +152,6 @@ Future<void> checkoutLlamaCppVersion(String packageRoot, String version) async {
   }
 }
 
-/// 运行 dart ffigen 生成绑定
 Future<void> runFfigen(String packageRoot) async {
   print('🔧 正在运行 dart ffigen 生成绑定...');
 
@@ -205,35 +184,33 @@ Future<void> runFfigen(String packageRoot) async {
   }
 }
 
-/// 获取二进制文件存储目录 .binary/{tag}/
-Directory getBinaryDirectory(String packageRoot, String tagName) {
-  return Directory(p.join(packageRoot, '.binaries', tagName));
-}
-
-/// 获取下载 URL
 String getDownloadUrl(PlatformConfig config, String tagName) {
-  final artifactName = _getArtifactName(config, tagName);
-
+  final artifactName = _getArtifactName(config);
   return 'https://github.com/Ant1mage/llama_native/releases/download/$tagName/$artifactName';
 }
 
-/// 生成 artifact 文件名
-String _getArtifactName(PlatformConfig config, String tagName) {
+String _getArtifactName(PlatformConfig config) {
   if (config.os == 'ios') {
-    return config.isSimulator ? 'llama-$tagName-ios-simulator.tar.gz' : 'llama-$tagName-ios-device.tar.gz';
+    if (config.isSimulator) {
+      final arch = config.arch == 'arm64' ? 'arm64' : 'x64';
+      return 'llama_ios_simulator_$arch.tar.gz';
+    } else {
+      return 'llama_ios_device.tar.gz';
+    }
   } else if (config.os == 'macos') {
-    return 'llama-$tagName-macos.tar.gz';
+    final arch = config.arch == 'arm64' ? 'arm64' : 'x64';
+    return 'llama_macos_$arch.tar.gz';
   } else if (config.os == 'android') {
-    return 'llama-$tagName-android-${config.arch}.tar.gz';
+    final arch = config.arch == 'arm64' ? 'arm64' : 'x64';
+    return 'llama_android_$arch.tar.gz';
   } else if (config.os == 'linux') {
-    return 'llama-$tagName-linux-x64.tar.gz';
+    return 'llama_linux_x64.tar.gz';
   } else if (config.os == 'windows') {
-    return 'llama-$tagName-windows-x64.tar.gz';
+    return 'llama_windows_x64.tar.gz';
   }
   throw UnsupportedError('Unsupported platform: ${config.os}');
 }
 
-/// 下载文件
 Future<File> downloadFile(String url, String destinationPath) async {
   print('📥 开始下载：$url');
   final client = HttpClient();
@@ -256,34 +233,20 @@ Future<File> downloadFile(String url, String destinationPath) async {
   }
 }
 
-/// 解压 tar.gz 文件
 Future<void> extractArchive(File archiveFile, String extractPath) async {
   print('📦 开始解压：${archiveFile.path}');
-  final bytes = await archiveFile.readAsBytes();
-  final archive = TarDecoder().decodeBytes(bytes);
+  await Directory(extractPath).create(recursive: true);
 
-  for (final file in archive) {
-    final filePath = p.join(extractPath, file.name);
+  final result = await Process.run('tar', ['-xzf', archiveFile.path, '-C', extractPath]);
 
-    if (file.isFile) {
-      final outFile = File(filePath);
-      await outFile.parent.create(recursive: true);
-      await outFile.writeAsBytes(file.content);
-      // 保留可执行权限
-      if (file.mode & 0x111 != 0) {
-        await Process.run('chmod', ['+x', filePath]);
-      }
-    } else {
-      await Directory(filePath).create(recursive: true);
-    }
+  if (result.exitCode != 0) {
+    throw Exception('解压失败：${result.stderr}');
   }
 
   print('✅ 解压完成：$extractPath');
 }
 
-/// 查找并处理库文件
-/// 所有平台统一使用动态库：.dylib (macOS/iOS), .so (Android/Linux), .dll (Windows)
-Future<File?> findAndCopyLibrary(String extractPath, String targetOS, String destDir) async {
+Future<File?> findMainLibrary(String extractPath, String targetOS) async {
   final extractDir = Directory(extractPath);
 
   if (!await extractDir.exists()) {
@@ -291,23 +254,17 @@ Future<File?> findAndCopyLibrary(String extractPath, String targetOS, String des
   }
 
   final files = extractDir.listSync(recursive: true);
-  final libName = _getLibraryName(targetOS);
+  final libExtensions = ['.dylib', '.so', '.dll'];
 
-  // 查找动态库文件
   for (final entity in files) {
     if (entity is File) {
-      final ext = p.extension(entity.path);
       final basename = p.basename(entity.path);
+      final ext = p.extension(entity.path);
 
-      final isSharedLib = ext == '.dylib' || ext == '.so' || ext == '.dll';
-      final isLlamaLib = basename.contains('llama') || basename.startsWith('lib');
-
-      if (isSharedLib && isLlamaLib) {
-        final newPath = p.join(destDir, libName);
-        print('📋 复制库文件：${p.basename(entity.path)} -> $libName');
-        await File(newPath).parent.create(recursive: true);
-        await entity.copy(newPath);
-        return File(newPath);
+      if (libExtensions.contains(ext)) {
+        if (basename == 'libllama.dylib' || basename == 'libllama.so' || basename == 'llama.dll') {
+          return entity;
+        }
       }
     }
   }
@@ -315,7 +272,6 @@ Future<File?> findAndCopyLibrary(String extractPath, String targetOS, String des
   return null;
 }
 
-/// 获取不同平台的库文件名
 String _getLibraryName(String os) {
   if (os == 'android' || os == 'linux') return 'libllama.so';
   if (os == 'ios' || os == 'macos') return 'libllama.dylib';
@@ -323,56 +279,46 @@ String _getLibraryName(String os) {
   throw UnsupportedError('Unsupported OS: $os');
 }
 
-/// 处理单个平台
 Future<File> processPlatform(PlatformConfig config, String packageRoot, String tagName) async {
-  print('\n========== 处理平台：${config.os}_${config.arch}${config.isSimulator ? '_simulator' : ''} ==========');
+  print('\n========== 处理平台：${config.os}-${config.arch}${config.isSimulator ? '-simulator' : ''} ==========');
 
-  // 获取二进制存储目录 .binary/{tag}/
-  final binaryDir = getBinaryDirectory(packageRoot, tagName);
   final platformDirName = '${config.os}_${config.arch}${config.isSimulator ? '_simulator' : ''}';
-  final platformDir = Directory(p.join(binaryDir.path, platformDirName));
+  final platformDir = Directory(p.join(packageRoot, '.binaries', platformDirName));
 
-  // 检查是否已下载
   final cachedLib = await _checkCachedLibrary(platformDir.path, config.os);
   if (cachedLib != null) {
     print('✅ 使用缓存的库文件：${cachedLib.path}');
     return cachedLib;
   }
 
-  // 获取下载链接
   final downloadUrl = getDownloadUrl(config, tagName);
-
-  // 创建下载和解压目录
-  final archivePath = p.join(binaryDir.path, 'downloads', _getArtifactName(config, tagName));
-  final extractPath = p.join(binaryDir.path, 'extracted', platformDirName);
+  final archiveName = _getArtifactName(config);
+  final archivePath = p.join(platformDir.path, archiveName);
 
   try {
-    // 创建目录
     await platformDir.create(recursive: true);
 
-    // 下载
     final archiveFile = await downloadFile(downloadUrl, archivePath);
 
-    // 解压
-    await extractArchive(archiveFile, extractPath);
+    await extractArchive(archiveFile, platformDir.path);
 
-    // 查找并复制库文件到目标目录
-    final libFile = await findAndCopyLibrary(extractPath, config.os, platformDir.path);
+    final libFile = await findMainLibrary(platformDir.path, config.os);
 
     if (libFile == null) {
       throw Exception('❌ 未找到库文件');
     }
 
-    print('✅ 平台 ${config.os}_${config.arch} 处理完成');
+    await archiveFile.delete();
+
+    print('✅ 平台 ${config.os}-${config.arch} 处理完成');
     print('📂 库文件位置：${libFile.path}');
     return libFile;
   } catch (e) {
-    print('❌ 处理平台 ${config.os}_${config.arch} 失败：$e');
+    print('❌ 处理平台 ${config.os}-${config.arch} 失败：$e');
     rethrow;
   }
 }
 
-/// 检查缓存的库文件
 Future<File?> _checkCachedLibrary(String platformDir, String targetOS) async {
   final dir = Directory(platformDir);
 
