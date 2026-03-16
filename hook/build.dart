@@ -247,7 +247,16 @@ Future<File> downloadFile(String url, String destinationPath) async {
   print('📥 开始下载：$url');
   final client = HttpClient();
   try {
+    // 获取环境变量
+    final token = Platform.environment['GITHUB_TOKEN'];
+    if (token == null || token.isEmpty) {
+      throw Exception("❌ 错误：找不到 GITHUB_TOKEN，请先在终端执行 export 设置它。");
+    }
+
+    print("✅ 已成功加载 Token，可以开始下载私有 Release。");
     final request = await client.getUrl(Uri.parse(url));
+    request.headers.add('Authorization', 'Bearer $token');
+    request.headers.add('Accept', 'application/octet-stream');
     final response = await request.close();
 
     if (response.statusCode != 200) {
