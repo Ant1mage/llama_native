@@ -293,8 +293,14 @@ class LlamaModel with Disposable {
           false, // special
         );
 
-        if (bufferSize <= 0) {
+        _logger.debug('detokenize: token=$token, bufferSize=$bufferSize');
+
+        if (bufferSize < 0) {
           _logger.debug('Invalid token: $token (bufferSize=$bufferSize)');
+          continue;
+        }
+
+        if (bufferSize == 0) {
           continue;
         }
 

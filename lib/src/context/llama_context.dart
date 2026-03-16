@@ -153,7 +153,9 @@ class LlamaContext with Disposable {
 
       await for (final msg in receivePort) {
         if (msg is _TokenMsg) {
-          final result = TokenGeneration(token: msg.token, text: _model.detokenize([msg.token]), isEnd: msg.isEnd);
+          final tokenText = _model.detokenize([msg.token]);
+          _logger.debug('Token: ${msg.token}, Text: "$tokenText", isEnd: ${msg.isEnd}');
+          final result = TokenGeneration(token: msg.token, text: tokenText, isEnd: msg.isEnd);
           _nPast = msg.nPast;
           _kvCache?.addProcessed(msg.isEnd ? 0 : 1);
           yield result;
