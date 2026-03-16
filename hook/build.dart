@@ -283,7 +283,7 @@ Future<File> processPlatform(PlatformConfig config, String packageRoot, String t
   print('\n========== 处理平台：${config.os}-${config.arch}${config.isSimulator ? '-simulator' : ''} ==========');
 
   final platformDirName = '${config.os}_${config.arch}${config.isSimulator ? '_simulator' : ''}';
-  final platformDir = Directory(p.join(packageRoot, '.binaries', platformDirName));
+  final platformDir = Directory(p.join(packageRoot, '.binaries', tagName, platformDirName));
 
   final cachedLib = await _checkCachedLibrary(platformDir.path, config.os);
   if (cachedLib != null) {
