@@ -65,6 +65,7 @@ class LlamaBackend {
     }
 
     _logger.info('Initializing LlamaBackend for $currentPlatform');
+    _logger.info('\n${PlatformInfo.getHardwareInfo()}');
     _logger.info('Config: gpu_layers=${_config.gpuLayers}, mmap=${_config.useMmap}');
 
     try {

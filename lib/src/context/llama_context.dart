@@ -135,9 +135,20 @@ class LlamaContext with Disposable {
   bool get isDisposed => _disposed;
 
   /// 流式生成（在独立 Isolate 中运行，避免阻塞主线程/GPU watchdog）
-  Stream<TokenGeneration> generateStream(List<int> inputTokens, {int maxTokens = 256, Grammar? grammar}) async* {
+  Stream<TokenGeneration> generateStream(List<int> inputTokens, {int maxTokens = 2048, Grammar? grammar}) async* {
     if (_disposed) throw StateError('Context is disposed');
     if (inputTokens.isEmpty) return;
+
+    final maxPossibleTokens = _config.nCtx - _nPast - inputTokens.length;
+    if (maxPossibleTokens <= 0) {
+      _logger.error('Context full: nCtx=${_config.nCtx}, nPast=$_nPast, inputTokens=${inputTokens.length}');
+      throw LlamaContextInitException('Context is full, cannot generate more tokens. Call reset() to clear context.');
+    }
+    final actualMaxTokens = maxTokens.clamp(1, maxPossibleTokens);
+
+    if (actualMaxTokens < maxTokens) {
+      _logger.warning('maxTokens reduced from $maxTokens to $actualMaxTokens due to context limit');
+    }
 
     final receivePort = ReceivePort();
     Isolate? isolate;
@@ -149,8 +160,10 @@ class LlamaContext with Disposable {
         samplerAddress: _samplerChain!.address,
         vocabAddress: _model.vocab.address,
         inputTokens: inputTokens,
-        maxTokens: maxTokens,
+        maxTokens: actualMaxTokens,
         grammarAddress: grammar?.sampler.address ?? 0,
+        nUBatch: _config.nUBatch,
+        currentNPast: _nPast,
       );
 
       isolate = await Isolate.spawn(_inferenceIsolate, args);
@@ -198,10 +211,10 @@ class LlamaContext with Disposable {
           ? Pointer<bindings.llama_sampler>.fromAddress(args.grammarAddress)
           : nullptr;
 
-      int nPast = 0;
+      int nPast = args.currentNPast;
 
       final tokens = args.inputTokens;
-      const prefillChunkSize = 64;
+      final prefillChunkSize = args.nUBatch;
       var offset = 0;
       while (offset < tokens.length) {
         final end = (offset + prefillChunkSize).clamp(0, tokens.length);
@@ -246,21 +259,32 @@ class LlamaContext with Disposable {
   static void _decodeChunk(Pointer<bindings.llama_context> ctx, List<int> tokens, int startPos, SendPort sendPort) {
     if (tokens.isEmpty) return;
 
-    final tokenArray = calloc<Int32>(tokens.length);
+    final nTokens = tokens.length;
+    final batch = bindings.llama_batch_init(nTokens, 0, 1);
+
     try {
-      for (var i = 0; i < tokens.length; i++) {
-        tokenArray.elementAt(i).value = tokens[i];
+      for (var i = 0; i < nTokens; i++) {
+        batch.token.elementAt(i).value = tokens[i];
+        batch.pos.elementAt(i).value = startPos + i;
+        batch.n_seq_id.elementAt(i).value = 1;
+        batch.seq_id.elementAt(i).value.elementAt(0).value = 0;
+        batch.logits.elementAt(i).value = 0;
       }
-      final batch = bindings.llama_batch_get_one(tokenArray, tokens.length);
+      batch.logits.elementAt(nTokens - 1).value = 1;
+      batch.n_tokens = nTokens;
+
       final ret = bindings.llama_decode(ctx, batch);
-      if (ret != 0) {
+      if (ret < 0) {
         throw LlamaContextInitException('llama_decode failed: $ret');
+      } else if (ret > 0) {
+        sendPort.send(_ErrorMsg('KV cache full, cannot generate more tokens'));
+        return;
       }
     } catch (e) {
       sendPort.send(_ErrorMsg('Decode chunk error: ${e.toString()}'));
       rethrow;
     } finally {
-      calloc.free(tokenArray);
+      bindings.llama_batch_free(batch);
     }
   }
 
@@ -355,6 +379,8 @@ class _IsolateArgs {
   final List<int> inputTokens;
   final int maxTokens;
   final int grammarAddress;
+  final int nUBatch;
+  final int currentNPast;
 
   const _IsolateArgs({
     required this.sendPort,
@@ -364,6 +390,8 @@ class _IsolateArgs {
     required this.inputTokens,
     required this.maxTokens,
     required this.grammarAddress,
+    required this.nUBatch,
+    required this.currentNPast,
   });
 }
 

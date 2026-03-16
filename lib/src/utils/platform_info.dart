@@ -123,21 +123,38 @@ class PlatformInfo {
     if (!supportsGpuOffload) return 0;
 
     final vram = availableVRAMMB;
-    int usableVram = vram;
+    final mem = availableMemoryMB;
 
-    if (modelSizeMB != null) {
-      usableVram = vram - modelSizeMB;
-      if (usableVram < 0) return 0;
+    int estimatedModelSize = modelSizeMB ?? 0;
+    if (estimatedModelSize == 0) {
+      estimatedModelSize = (mem * 0.3).toInt();
     }
 
+    int usableVram = vram - estimatedModelSize;
+    if (usableVram < 512) return 0;
+
     if (modelLayers != null) {
-      final vramPerLayer = modelSizeMB != null ? (modelSizeMB * 1.2) / modelLayers : 150;
+      final vramPerLayer = (estimatedModelSize * 1.5) / modelLayers;
       final maxLayers = (usableVram / vramPerLayer).floor();
       return maxLayers.clamp(0, modelLayers);
     }
 
-    if (Platform.isMacOS && isAppleSilicon) return 99;
-    if (Platform.isIOS) return 40;
+    if (Platform.isMacOS && isAppleSilicon) {
+      if (mem >= 32 * 1024) return 99;
+      if (mem >= 24 * 1024) return 80;
+      if (mem >= 16 * 1024) return 60;
+      if (mem >= 12 * 1024) return 40;
+      if (mem >= 8 * 1024) return 30;
+      if (mem >= 6 * 1024) return 20;
+      return 10;
+    }
+
+    if (Platform.isIOS) {
+      if (mem >= 8 * 1024) return 40;
+      if (mem >= 6 * 1024) return 30;
+      if (mem >= 4 * 1024) return 20;
+      return 10;
+    }
 
     if (usableVram >= 12 * 1024) return 99;
     if (usableVram >= 8 * 1024) return 60;
@@ -149,15 +166,25 @@ class PlatformInfo {
 
   static int recommendedContextLength({int? modelSizeMB}) {
     final mem = availableMemoryMB;
-    int usableMem = mem;
 
-    if (modelSizeMB != null) {
-      usableMem = mem - modelSizeMB;
+    int estimatedModelSize = modelSizeMB ?? 0;
+    if (estimatedModelSize == 0) {
+      estimatedModelSize = (mem * 0.3).toInt();
     }
+
+    int usableMem = mem - estimatedModelSize;
+    if (usableMem < 512) return 512;
 
     if (Platform.isIOS || Platform.isAndroid) {
       if (usableMem >= 4 * 1024) return 4096;
       if (usableMem >= 2 * 1024) return 2048;
+      return 1024;
+    }
+
+    if (Platform.isMacOS && isAppleSilicon) {
+      if (usableMem >= 12 * 1024) return 8192;
+      if (usableMem >= 8 * 1024) return 4096;
+      if (usableMem >= 4 * 1024) return 2048;
       return 1024;
     }
 
@@ -212,6 +239,11 @@ class PlatformInfo {
     buffer.writeln('GPU Offload: ${supportsGpuOffload ? 'Supported' : 'Not Supported'}');
     buffer.writeln('Hardware Acceleration: ${detectHardwareAcceleration()}');
     if (Platform.isMacOS) buffer.writeln('Apple Silicon: $isAppleSilicon');
+    buffer.writeln('--- Recommended Config ---');
+    buffer.writeln('GPU Layers: ${recommendedGpuLayers()}');
+    buffer.writeln('Context Length: ${recommendedContextLength()}');
+    buffer.writeln('Batch Size: ${recommendedBatchSize()}');
+    buffer.writeln('Threads: ${recommendedThreads()}');
     return buffer.toString();
   }
 

@@ -37,6 +37,8 @@ void main(List<String> args) async {
       isSimulator = input.config.code.iOS.targetSdk == IOSSdk.iPhoneSimulator;
     }
 
+    print('🎯 目标平台: $targetOS, 目标架构: $targetArch');
+
     final platformConfig = PlatformConfig(os: targetOS, arch: targetArch, isSimulator: isSimulator);
 
     final libFiles = await processPlatform(platformConfig, packageRoot, llamaCppVersion);
@@ -222,25 +224,37 @@ String getDownloadUrl(PlatformConfig config, String tagName) {
 }
 
 String _getArtifactName(PlatformConfig config) {
+  final arch = _normalizeArch(config.arch);
+  print('🔧 架构映射: ${config.arch} -> $arch');
+
   if (config.os == 'ios') {
     if (config.isSimulator) {
-      final arch = config.arch == 'arm64' ? 'arm64' : 'x64';
       return 'llama_ios_simulator_$arch.tar.gz';
     } else {
       return 'llama_ios_device.tar.gz';
     }
   } else if (config.os == 'macos') {
-    final arch = config.arch == 'arm64' ? 'arm64' : 'x64';
     return 'llama_macos_$arch.tar.gz';
   } else if (config.os == 'android') {
-    final arch = config.arch == 'arm64' ? 'arm64' : 'x64';
     return 'llama_android_$arch.tar.gz';
   } else if (config.os == 'linux') {
-    return 'llama_linux_x64.tar.gz';
+    return 'llama_linux_$arch.tar.gz';
   } else if (config.os == 'windows') {
-    return 'llama_windows_x64.tar.gz';
+    return 'llama_windows_$arch.tar.gz';
   }
   throw UnsupportedError('Unsupported platform: ${config.os}');
+}
+
+String _normalizeArch(String arch) {
+  final lowerArch = arch.toLowerCase();
+  if (lowerArch == 'arm64' || lowerArch == 'aarch64') {
+    return 'arm64';
+  } else if (lowerArch == 'x86_64' || lowerArch == 'x64' || lowerArch == 'amd64') {
+    return 'x64';
+  } else if (lowerArch == 'arm' || lowerArch == 'armeabi-v7a' || lowerArch == 'armv7') {
+    return 'arm';
+  }
+  return arch;
 }
 
 Future<File> downloadFile(String url, String destinationPath) async {

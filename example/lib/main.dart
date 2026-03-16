@@ -83,17 +83,21 @@ class _ChatPageState extends State<ChatPage> {
       final modelConfig = LlamaModelConfig(modelPath: _modelPath!);
       _model = LlamaModel.load(modelConfig);
 
-      final inferenceConfig = InferenceConfig.defaults(
-        nCtx: 4096,
+      final metadata = _model!.getMetadata();
+      debugPrint('Model: ${metadata.name}, Context: ${metadata.contextLength}');
+
+      final inferenceConfig = InferenceConfig.defaultMacOS(
         sampling: SamplingConfig(temperature: 0.7, topP: 0.9, topK: 40),
       );
+
+      debugPrint('Using config: $inferenceConfig');
 
       _context = LlamaContext.create(_model!, inferenceConfig);
 
       setState(() {
         _isModelLoaded = true;
         _isLoading = false;
-        _statusText = '模型加载成功，可以开始对话';
+        _statusText = '模型加载成功 (GPU layers: ${inferenceConfig.nGpuLayers}, Context: ${inferenceConfig.nCtx})';
       });
     } catch (e) {
       setState(() {
@@ -131,7 +135,7 @@ class _ChatPageState extends State<ChatPage> {
       final tokens = _model!.tokenize(prompt, addBos: false);
       debugPrint('=== Tokens (${tokens.length}) ===\n$tokens\n=============');
 
-      final stream = _context!.generateStream(tokens, maxTokens: 512);
+      final stream = _context!.generateStream(tokens, maxTokens: 1024);
 
       final buffer = StringBuffer();
       await for (final generation in stream) {

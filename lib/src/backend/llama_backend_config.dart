@@ -22,26 +22,28 @@ class LlamaBackendConfig {
         Platform.isMacOS &&
         (const String.fromEnvironment('TARGET_ARCH') == 'arm64' || const String.fromEnvironment('TARGET_ARCH').isEmpty);
 
-    return LlamaBackendConfig(gpuLayers: isAppleSilicon ? 99 : 0, useMmap: true, useMlock: false);
+    final gpuLayers = isAppleSilicon ? PlatformInfo.recommendedGpuLayers() : 0;
+    return LlamaBackendConfig(gpuLayers: gpuLayers, useMmap: true, useMlock: false);
   }
 
   factory LlamaBackendConfig.defaultAndroid() {
-    final supportsVulkan = PlatformInfo.supportsGpuOffload;
-    return LlamaBackendConfig(gpuLayers: supportsVulkan ? 20 : 0, useMmap: true, useMlock: false);
+    final gpuLayers = PlatformInfo.recommendedGpuLayers();
+    return LlamaBackendConfig(gpuLayers: gpuLayers, useMmap: true, useMlock: false);
   }
 
   factory LlamaBackendConfig.defaultWindows() {
-    final supportsCuda = PlatformInfo.supportsGpuOffload;
-    return LlamaBackendConfig(gpuLayers: supportsCuda ? 35 : 0, useMmap: true, useMlock: false);
+    final gpuLayers = PlatformInfo.recommendedGpuLayers();
+    return LlamaBackendConfig(gpuLayers: gpuLayers, useMmap: true, useMlock: false);
   }
 
   factory LlamaBackendConfig.defaultLinux() {
-    final supportsGpu = PlatformInfo.supportsGpuOffload;
-    return LlamaBackendConfig(gpuLayers: supportsGpu ? 35 : 0, useMmap: true, useMlock: false);
+    final gpuLayers = PlatformInfo.recommendedGpuLayers();
+    return LlamaBackendConfig(gpuLayers: gpuLayers, useMmap: true, useMlock: false);
   }
 
   factory LlamaBackendConfig.defaultIOS() {
-    return LlamaBackendConfig(gpuLayers: PlatformInfo.supportsGpuOffload ? 40 : 0, useMmap: true, useMlock: false);
+    final gpuLayers = PlatformInfo.recommendedGpuLayers();
+    return LlamaBackendConfig(gpuLayers: gpuLayers, useMmap: true, useMlock: false);
   }
 
   factory LlamaBackendConfig.forGpuLayers(int gpuLayers) {

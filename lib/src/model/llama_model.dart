@@ -1,6 +1,7 @@
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:convert';
 import 'package:ffi/ffi.dart';
 import 'package:llama_native/llama_native_bindings.dart' as bindings;
 import 'package:llama_native/src/backend/llama_backend.dart';
@@ -281,21 +282,12 @@ class LlamaModel with Disposable {
 
     _logger.debug('detokenize: tokens=$tokens, vocab address=${vocab.address}');
 
-    final buffer = StringBuffer();
+    final allBytes = <int>[];
 
     for (final token in tokens) {
       try {
-        // 先获取所需缓冲区大小
-        var bufferSize = bindings.llama_token_to_piece(
-          vocab,
-          token,
-          nullptr,
-          0,
-          0, // lstrip
-          true, // special - include special tokens
-        );
+        var bufferSize = bindings.llama_token_to_piece(vocab, token, nullptr, 0, 0, true);
 
-        // 负数表示需要的缓冲区大小（绝对值）
         if (bufferSize < 0) {
           bufferSize = -bufferSize;
         }
@@ -304,22 +296,15 @@ class LlamaModel with Disposable {
           continue;
         }
 
-        // 分配缓冲区并获取文本
         final pieceBuffer = calloc<Char>(bufferSize);
         try {
-          final actualSize = bindings.llama_token_to_piece(
-            vocab,
-            token,
-            pieceBuffer,
-            bufferSize,
-            0, // lstrip
-            true, // special - include special tokens
-          );
+          final actualSize = bindings.llama_token_to_piece(vocab, token, pieceBuffer, bufferSize, 0, true);
 
           if (actualSize > 0) {
-            // 转换为 Dart 字符串
-            final stringBytes = Uint8List.fromList(List.generate(actualSize, (i) => pieceBuffer.elementAt(i).value));
-            buffer.write(String.fromCharCodes(stringBytes));
+            for (var i = 0; i < actualSize; i++) {
+              final byte = pieceBuffer.elementAt(i).value;
+              allBytes.add(byte < 0 ? byte + 256 : byte);
+            }
           }
         } catch (e) {
           _logger.error('Error detokenizing token $token: $e');
@@ -331,7 +316,12 @@ class LlamaModel with Disposable {
       }
     }
 
-    return buffer.toString();
+    try {
+      return utf8.decode(allBytes, allowMalformed: true);
+    } catch (e) {
+      _logger.warning('UTF-8 decode failed: $e');
+      return String.fromCharCodes(allBytes);
+    }
   }
 
   @override
