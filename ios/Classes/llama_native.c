@@ -1,1 +1,1 @@
-#include "../../src/llama_native_wrapper.h"
+// Empty implementation - native library is loaded via native assets

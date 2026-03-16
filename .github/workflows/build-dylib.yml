@@ -41,16 +41,6 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
-          
-          cd output
-          for dylib in *.dylib; do
-            for dep in $(otool -L "$dylib" | grep "build/bin" | awk '{print $1}'); do
-              dep_name=$(basename "$dep")
-              install_name_tool -change "$dep" "@loader_path/$dep_name" "$dylib"
-            done
-            install_name_tool -id "@rpath/$dylib" "$dylib"
-          done
-          
           tar -czvf llama_macos_arm64.tar.gz .
 
       - name: Upload to Release
@@ -97,16 +87,6 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
-          
-          cd output
-          for dylib in *.dylib; do
-            for dep in $(otool -L "$dylib" | grep "build/bin" | awk '{print $1}'); do
-              dep_name=$(basename "$dep")
-              install_name_tool -change "$dep" "@loader_path/$dep_name" "$dylib"
-            done
-            install_name_tool -id "@rpath/$dylib" "$dylib"
-          done
-          
           tar -czvf llama_macos_x64.tar.gz .
 
       - name: Upload to Release
@@ -155,16 +135,6 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
-          
-          cd output
-          for dylib in *.dylib; do
-            for dep in $(otool -L "$dylib" | grep "build/bin" | awk '{print $1}'); do
-              dep_name=$(basename "$dep")
-              install_name_tool -change "$dep" "@loader_path/$dep_name" "$dylib"
-            done
-            install_name_tool -id "@rpath/$dylib" "$dylib"
-          done
-          
           tar -czvf llama_ios_device.tar.gz .
 
       - name: Upload to Release
@@ -214,16 +184,6 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
-          
-          cd output
-          for dylib in *.dylib; do
-            for dep in $(otool -L "$dylib" | grep "build/bin" | awk '{print $1}'); do
-              dep_name=$(basename "$dep")
-              install_name_tool -change "$dep" "@loader_path/$dep_name" "$dylib"
-            done
-            install_name_tool -id "@rpath/$dylib" "$dylib"
-          done
-          
           tar -czvf llama_ios_simulator_arm64.tar.gz .
 
       - name: Upload to Release
@@ -273,16 +233,6 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
-          
-          cd output
-          for dylib in *.dylib; do
-            for dep in $(otool -L "$dylib" | grep "build/bin" | awk '{print $1}'); do
-              dep_name=$(basename "$dep")
-              install_name_tool -change "$dep" "@loader_path/$dep_name" "$dylib"
-            done
-            install_name_tool -id "@rpath/$dylib" "$dylib"
-          done
-          
           tar -czvf llama_ios_simulator_x64.tar.gz .
 
       - name: Upload to Release

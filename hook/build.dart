@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:code_assets/code_assets.dart';
-import 'package:data_assets/data_assets.dart';
 import 'package:hooks/hooks.dart';
 import 'package:path/path.dart' as p;
 
@@ -61,11 +60,24 @@ void main(List<String> args) async {
 
     for (final lib in libFiles) {
       if (p.basename(lib.path) != mainLibName) {
-        output.assets.data.add(DataAsset(package: 'llama_native', name: p.basename(lib.path), file: lib.uri));
+        output.assets.code.add(
+          CodeAsset(
+            package: 'llama_native',
+            name: 'native_${p.basenameWithoutExtension(lib.path)}',
+            linkMode: DynamicLoadingBundled(),
+            file: lib.uri,
+          ),
+        );
       }
     }
 
     print('\n✅ ========== 构建完成：${libFiles.length} 个库文件 ==========');
+    print('📂 主库：${mainLib.path}');
+    for (final lib in libFiles) {
+      if (p.basename(lib.path) != mainLibName) {
+        print('   依赖：${p.basename(lib.path)}');
+      }
+    }
   });
 }
 

@@ -21,7 +21,7 @@ EXTERNAL SOURCES:
 SPEC CHECKSUMS:
   file_picker: e716a70a9fe5fd9e09ebc922d7541464289443af
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
-  llama_native: de1db9aeb9062ead8e6a85003ef0707a4c58e1f7
+  llama_native: 7e8f38d4cd7e0d4a3d0a893f6bb82fa8710faba7
 
 PODFILE CHECKSUM: 54d867c82ac51cbd61b565781b9fada492027009
 
