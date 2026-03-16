@@ -100,11 +100,11 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build Library
+      - name: Build Library (arm64)
         shell: bash
         run: |
           cd llama.cpp
-          mkdir -p build-android && cd build-android
+          mkdir -p build-android-arm64 && cd build-android-arm64
 
           cmake .. \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
@@ -115,11 +115,32 @@ jobs:
 
           cmake --build . --config Release --target llama --parallel
 
-      - name: Package Artifact
+      - name: Build Library (x86_64)
+        shell: bash
         run: |
-          mkdir -p output
-          find llama.cpp/build-android/bin -name "*.so" -exec cp {} output/ \;
-          tar -czvf llama-${{ github.ref_name }}-android-arm64.tar.gz -C output .
+          cd llama.cpp
+          mkdir -p build-android-x86_64 && cd build-android-x86_64
+
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=x86_64 \
+            -DANDROID_PLATFORM=android-24 \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF
+
+          cmake --build . --config Release --target llama --parallel
+
+      - name: Package Artifacts
+        run: |
+          # arm64
+          mkdir -p output-arm64
+          find llama.cpp/build-android-arm64/bin -name "*.so" -exec cp {} output-arm64/ \;
+          tar -czvf llama-${{ github.ref_name }}-android-arm64.tar.gz -C output-arm64 .
+
+          # x86_64
+          mkdir -p output-x86_64
+          find llama.cpp/build-android-x86_64/bin -name "*.so" -exec cp {} output-x86_64/ \;
+          tar -czvf llama-${{ github.ref_name }}-android-x86_64.tar.gz -C output-x86_64 .
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
