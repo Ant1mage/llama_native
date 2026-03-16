@@ -27,9 +27,19 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
             -DBUILD_SHARED_LIBS=ON \
             -DGGML_METAL=ON \
-            -DGGML_NATIVE=OFF
+            -DGGML_NATIVE=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF
 
-          cmake --build . --config Release --target llama --parallel
+          cmake --build . --config Release --parallel
+
+      - name: Verify macOS Build Output
+        run: |
+          echo "Checking macOS build output..."
+          find llama.cpp/build-macos -name "*.dylib" || echo "No dylib found"
+          find llama.cpp/build-macos -name "*.a" || echo "No static lib found"
+          ls -la llama.cpp/build-macos/src/ || echo "src directory not found"
+          ls -la llama.cpp/build-macos/src/Release/ || echo "Release directory not found"
 
       - name: Build iOS dylib
         run: |
@@ -63,17 +73,38 @@ jobs:
           mkdir -p artifacts
 
           # macOS dylib (universal)
-          find llama.cpp/build-macos/bin -name "*.dylib" -exec cp {} artifacts/libllama.dylib \;
+          if [ -f "llama.cpp/build-macos/src/libllama.dylib" ]; then
+            cp llama.cpp/build-macos/src/libllama.dylib artifacts/
+          elif [ -f "llama.cpp/build-macos/src/Release/libllama.dylib" ]; then
+            cp llama.cpp/build-macos/src/Release/libllama.dylib artifacts/
+          else
+            echo "Error: macOS dylib not found"
+            exit 1
+          fi
           tar -czvf llama-${{ github.ref_name }}-macos.tar.gz -C artifacts libllama.dylib
-          rm artifacts/*
+          rm -rf artifacts/*
 
           # iOS Device dylib
-          find llama.cpp/build-ios-device/bin -name "*.dylib" -exec cp {} artifacts/libllama.dylib \;
+          if [ -f "llama.cpp/build-ios-device/src/libllama.dylib" ]; then
+            cp llama.cpp/build-ios-device/src/libllama.dylib artifacts/
+          elif [ -f "llama.cpp/build-ios-device/src/Release-iphoneos/libllama.dylib" ]; then
+            cp llama.cpp/build-ios-device/src/Release-iphoneos/libllama.dylib artifacts/
+          else
+            echo "Error: iOS device dylib not found"
+            exit 1
+          fi
           tar -czvf llama-${{ github.ref_name }}-ios-device.tar.gz -C artifacts libllama.dylib
-          rm artifacts/*
+          rm -rf artifacts/*
 
           # iOS Simulator dylib
-          find llama.cpp/build-ios-sim/bin -name "*.dylib" -exec cp {} artifacts/libllama.dylib \;
+          if [ -f "llama.cpp/build-ios-sim/src/libllama.dylib" ]; then
+            cp llama.cpp/build-ios-sim/src/libllama.dylib artifacts/
+          elif [ -f "llama.cpp/build-ios-sim/src/Release-iphonesimulator/libllama.dylib" ]; then
+            cp llama.cpp/build-ios-sim/src/Release-iphonesimulator/libllama.dylib artifacts/
+          else
+            echo "Error: iOS simulator dylib not found"
+            exit 1
+          fi
           tar -czvf llama-${{ github.ref_name }}-ios-simulator.tar.gz -C artifacts libllama.dylib
 
       - name: Upload to Release
