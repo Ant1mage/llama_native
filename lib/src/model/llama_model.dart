@@ -279,25 +279,25 @@ class LlamaModel with Disposable {
     if (_disposed) throw StateError('Model is disposed');
     if (tokens.isEmpty) return '';
 
+    _logger.debug('detokenize: tokens=$tokens, vocab address=${vocab.address}');
+
     final buffer = StringBuffer();
 
     for (final token in tokens) {
       try {
         // 先获取所需缓冲区大小
-        final bufferSize = bindings.llama_token_to_piece(
+        var bufferSize = bindings.llama_token_to_piece(
           vocab,
           token,
           nullptr,
           0,
           0, // lstrip
-          false, // special
+          true, // special - include special tokens
         );
 
-        _logger.debug('detokenize: token=$token, bufferSize=$bufferSize');
-
+        // 负数表示需要的缓冲区大小（绝对值）
         if (bufferSize < 0) {
-          _logger.debug('Invalid token: $token (bufferSize=$bufferSize)');
-          continue;
+          bufferSize = -bufferSize;
         }
 
         if (bufferSize == 0) {
@@ -313,7 +313,7 @@ class LlamaModel with Disposable {
             pieceBuffer,
             bufferSize,
             0, // lstrip
-            false, // special
+            true, // special - include special tokens
           );
 
           if (actualSize > 0) {

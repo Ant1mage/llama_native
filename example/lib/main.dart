@@ -80,13 +80,11 @@ class _ChatPageState extends State<ChatPage> {
       final backend = LlamaBackend.instance;
       await backend.initialize();
 
-      final config = LlamaModelConfig(modelPath: _modelPath!);
-      _model = LlamaModel.load(config);
+      final modelConfig = LlamaModelConfig(modelPath: _modelPath!);
+      _model = LlamaModel.load(modelConfig);
 
-      final inferenceConfig = InferenceConfig(
+      final inferenceConfig = InferenceConfig.defaults(
         nCtx: 4096,
-        nBatch: 512,
-        nThreads: 4,
         sampling: SamplingConfig(temperature: 0.7, topP: 0.9, topK: 40),
       );
 
@@ -128,7 +126,10 @@ class _ChatPageState extends State<ChatPage> {
           .toList();
 
       final prompt = chatTokenizer.applyTemplate(chatMessages);
+      debugPrint('=== Prompt ===\n$prompt\n=============');
+
       final tokens = _model!.tokenize(prompt, addBos: false);
+      debugPrint('=== Tokens (${tokens.length}) ===\n$tokens\n=============');
 
       final stream = _context!.generateStream(tokens, maxTokens: 512);
 

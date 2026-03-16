@@ -1,77 +1,204 @@
 import 'package:llama_native/src/sampling/sampling_config.dart';
+import 'package:llama_native/src/utils/platform_info.dart';
 import 'dart:io';
 
-/// Llama 上下文推理配置
 class InferenceConfig {
-  /// 上下文长度
   final int nCtx;
-
-  /// 批次大小
   final int nBatch;
-
-  /// 线程数
+  final int nUBatch;
   final int nThreads;
-
-  /// 采样配置
+  final int nGpuLayers;
+  final int nGpuLayersDraft;
   final SamplingConfig sampling;
 
   const InferenceConfig({
     this.nCtx = 4096,
     this.nBatch = 512,
+    this.nUBatch = 128,
     this.nThreads = 4,
+    this.nGpuLayers = 0,
+    this.nGpuLayersDraft = 0,
     this.sampling = const SamplingConfig(),
   });
 
-  /// 创建默认配置 (macOS 优化)
-  factory InferenceConfig.defaultMacOS() {
+  factory InferenceConfig.defaults({
+    int? nCtx,
+    int? nBatch,
+    int? nUBatch,
+    int? nThreads,
+    int? nGpuLayers,
+    SamplingConfig? sampling,
+    int? modelSizeMB,
+    int? modelLayers,
+  }) {
     return InferenceConfig(
-      nCtx: 4096,
-      // n_batch 控制单次 prefill 批大小，过大会触发 Metal GPU watchdog timeout
-      // Metal 对单个 command buffer 执行时间有限制（约数秒）
-      // 64 是在 Apple Silicon 上安全的保守值
-      nBatch: 64,
-      nThreads: Platform.numberOfProcessors,
-      sampling: const SamplingConfig(temperature: 0.7, topP: 0.9),
+      nCtx: nCtx ?? PlatformInfo.recommendedContextLength(modelSizeMB: modelSizeMB),
+      nBatch: nBatch ?? PlatformInfo.recommendedBatchSize(),
+      nUBatch: nUBatch ?? PlatformInfo.recommendedUBatchSize(),
+      nThreads: nThreads ?? PlatformInfo.recommendedThreads(),
+      nGpuLayers: nGpuLayers ?? PlatformInfo.recommendedGpuLayers(modelSizeMB: modelSizeMB, modelLayers: modelLayers),
+      sampling: sampling ?? const SamplingConfig(temperature: 0.7, topP: 0.9),
     );
   }
 
-  /// Android 默认配置
-  factory InferenceConfig.defaultAndroid() {
-    return InferenceConfig(
-      nCtx: 2048,
-      nBatch: 256,
-      nThreads: Platform.numberOfProcessors.clamp(2, 4),
-      sampling: const SamplingConfig(temperature: 0.7, topP: 0.9),
+  factory InferenceConfig.forModel({
+    required int modelSizeMB,
+    int? modelLayers,
+    int? nCtx,
+    int? nThreads,
+    SamplingConfig? sampling,
+  }) {
+    return InferenceConfig.defaults(
+      modelSizeMB: modelSizeMB,
+      modelLayers: modelLayers,
+      nCtx: nCtx,
+      nThreads: nThreads,
+      sampling: sampling,
     );
   }
 
-  /// Windows 默认配置
-  factory InferenceConfig.defaultWindows() {
+  factory InferenceConfig.defaultMacOS({
+    int? nCtx,
+    int? nBatch,
+    int? nUBatch,
+    int? nThreads,
+    int? nGpuLayers,
+    SamplingConfig? sampling,
+  }) {
     return InferenceConfig(
-      nCtx: 4096,
-      nBatch: 512,
-      nThreads: Platform.numberOfProcessors.clamp(2, 8),
-      sampling: const SamplingConfig(temperature: 0.7, topP: 0.9),
+      nCtx: nCtx ?? 8192,
+      nBatch: nBatch ?? 512,
+      nUBatch: nUBatch ?? 128,
+      nThreads: nThreads ?? PlatformInfo.recommendedThreads(),
+      nGpuLayers: nGpuLayers ?? (PlatformInfo.supportsGpuOffload ? 99 : 0),
+      sampling: sampling ?? const SamplingConfig(temperature: 0.7, topP: 0.9),
     );
   }
 
-  /// Linux 默认配置
-  factory InferenceConfig.defaultLinux() {
+  factory InferenceConfig.defaultIOS({
+    int? nCtx,
+    int? nBatch,
+    int? nUBatch,
+    int? nThreads,
+    int? nGpuLayers,
+    SamplingConfig? sampling,
+  }) {
     return InferenceConfig(
-      nCtx: 4096,
-      nBatch: 512,
-      nThreads: Platform.numberOfProcessors.clamp(2, 8),
-      sampling: const SamplingConfig(temperature: 0.7, topP: 0.9),
+      nCtx: nCtx ?? 2048,
+      nBatch: nBatch ?? 64,
+      nUBatch: nUBatch ?? 32,
+      nThreads: nThreads ?? Platform.numberOfProcessors.clamp(2, 4),
+      nGpuLayers: nGpuLayers ?? (PlatformInfo.supportsGpuOffload ? 40 : 0),
+      sampling: sampling ?? const SamplingConfig(temperature: 0.7, topP: 0.9),
     );
   }
 
-  /// iOS 默认配置
-  factory InferenceConfig.defaultIOS() {
+  factory InferenceConfig.defaultAndroid({
+    int? nCtx,
+    int? nBatch,
+    int? nUBatch,
+    int? nThreads,
+    int? nGpuLayers,
+    SamplingConfig? sampling,
+  }) {
     return InferenceConfig(
-      nCtx: 2048,
-      nBatch: 32, // iOS Metal watchdog 更严格
-      nThreads: Platform.numberOfProcessors.clamp(2, 4),
-      sampling: const SamplingConfig(temperature: 0.7, topP: 0.9),
+      nCtx: nCtx ?? 2048,
+      nBatch: nBatch ?? 256,
+      nUBatch: nUBatch ?? 128,
+      nThreads: nThreads ?? Platform.numberOfProcessors.clamp(2, 4),
+      nGpuLayers: nGpuLayers ?? (PlatformInfo.supportsGpuOffload ? 20 : 0),
+      sampling: sampling ?? const SamplingConfig(temperature: 0.7, topP: 0.9),
     );
+  }
+
+  factory InferenceConfig.defaultWindows({
+    int? nCtx,
+    int? nBatch,
+    int? nUBatch,
+    int? nThreads,
+    int? nGpuLayers,
+    SamplingConfig? sampling,
+  }) {
+    return InferenceConfig(
+      nCtx: nCtx ?? 4096,
+      nBatch: nBatch ?? 512,
+      nUBatch: nUBatch ?? 128,
+      nThreads: nThreads ?? Platform.numberOfProcessors.clamp(2, 8),
+      nGpuLayers: nGpuLayers ?? (PlatformInfo.supportsGpuOffload ? 35 : 0),
+      sampling: sampling ?? const SamplingConfig(temperature: 0.7, topP: 0.9),
+    );
+  }
+
+  factory InferenceConfig.defaultLinux({
+    int? nCtx,
+    int? nBatch,
+    int? nUBatch,
+    int? nThreads,
+    int? nGpuLayers,
+    SamplingConfig? sampling,
+  }) {
+    return InferenceConfig(
+      nCtx: nCtx ?? 4096,
+      nBatch: nBatch ?? 512,
+      nUBatch: nUBatch ?? 128,
+      nThreads: nThreads ?? Platform.numberOfProcessors.clamp(2, 8),
+      nGpuLayers: nGpuLayers ?? (PlatformInfo.supportsGpuOffload ? 35 : 0),
+      sampling: sampling ?? const SamplingConfig(temperature: 0.7, topP: 0.9),
+    );
+  }
+
+  factory InferenceConfig.cpu({int? nCtx, int? nBatch, int? nThreads, SamplingConfig? sampling}) {
+    return InferenceConfig(
+      nCtx: nCtx ?? 4096,
+      nBatch: nBatch ?? 256,
+      nUBatch: 128,
+      nThreads: nThreads ?? PlatformInfo.recommendedThreads(),
+      nGpuLayers: 0,
+      sampling: sampling ?? const SamplingConfig(temperature: 0.7, topP: 0.9),
+    );
+  }
+
+  factory InferenceConfig.gpu({
+    int? nCtx,
+    int? nBatch,
+    int? nGpuLayers,
+    SamplingConfig? sampling,
+    int? modelSizeMB,
+    int? modelLayers,
+  }) {
+    return InferenceConfig(
+      nCtx: nCtx ?? PlatformInfo.recommendedContextLength(modelSizeMB: modelSizeMB),
+      nBatch: nBatch ?? PlatformInfo.recommendedBatchSize(useGpu: true),
+      nUBatch: 128,
+      nThreads: PlatformInfo.recommendedThreads(),
+      nGpuLayers: nGpuLayers ?? PlatformInfo.recommendedGpuLayers(modelSizeMB: modelSizeMB, modelLayers: modelLayers),
+      sampling: sampling ?? const SamplingConfig(temperature: 0.7, topP: 0.9),
+    );
+  }
+
+  InferenceConfig copyWith({
+    int? nCtx,
+    int? nBatch,
+    int? nUBatch,
+    int? nThreads,
+    int? nGpuLayers,
+    int? nGpuLayersDraft,
+    SamplingConfig? sampling,
+  }) {
+    return InferenceConfig(
+      nCtx: nCtx ?? this.nCtx,
+      nBatch: nBatch ?? this.nBatch,
+      nUBatch: nUBatch ?? this.nUBatch,
+      nThreads: nThreads ?? this.nThreads,
+      nGpuLayers: nGpuLayers ?? this.nGpuLayers,
+      nGpuLayersDraft: nGpuLayersDraft ?? this.nGpuLayersDraft,
+      sampling: sampling ?? this.sampling,
+    );
+  }
+
+  @override
+  String toString() {
+    return 'InferenceConfig(nCtx: $nCtx, nBatch: $nBatch, nUBatch: $nUBatch, '
+        'nThreads: $nThreads, nGpuLayers: $nGpuLayers, sampling: $sampling)';
   }
 }

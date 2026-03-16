@@ -2,25 +2,9 @@ import 'dart:io';
 import 'package:llama_native/llama_native.dart';
 import 'package:llama_native/llama_native_bindings.dart' as bindings;
 
+enum HardwareAcceleration { metal, cuda, vulkan, cpu }
 
-/// 硬件加速类型枚举
-enum HardwareAcceleration {
-  /// Apple Metal (macOS/iOS)
-  metal,
-
-  /// NVIDIA CUDA (Windows/Linux)
-  cuda,
-
-  /// Vulkan (Android/Linux)
-  vulkan,
-
-  /// 纯 CPU (通用回退)
-  cpu,
-}
-
-/// Llama 平台信息工具类
 class PlatformInfo {
-  /// 当前平台
   static String get currentPlatform {
     if (Platform.isMacOS) return 'macOS';
     if (Platform.isIOS) return 'iOS';
@@ -30,165 +14,213 @@ class PlatformInfo {
     return 'Unknown';
   }
 
-  /// 是否为 Apple Silicon (M1/M2/M3)
   static bool get isAppleSilicon {
     if (!Platform.isMacOS) return false;
-    // 通过 uname 检测架构
     return const String.fromEnvironment('TARGET_ARCH') == 'arm64' ||
         const String.fromEnvironment('TARGET_ARCH').isEmpty;
   }
 
-  /// 是否支持 GPU 卸载
   static bool get supportsGpuOffload {
     return bindings.llama_supports_gpu_offload();
   }
 
-  /// 获取系统内存总量（MB）- 估算值
+  static int? _cachedSystemMemoryMB;
+  static int? _cachedAvailableMemoryMB;
+
+  static int get systemMemoryMB {
+    if (_cachedSystemMemoryMB != null) return _cachedSystemMemoryMB!;
+    _cachedSystemMemoryMB = _getSystemMemoryMB();
+    return _cachedSystemMemoryMB!;
+  }
+
+  static int get availableMemoryMB {
+    if (_cachedAvailableMemoryMB != null) return _cachedAvailableMemoryMB!;
+    _cachedAvailableMemoryMB = _getAvailableMemoryMB();
+    return _cachedAvailableMemoryMB!;
+  }
+
   static int _getSystemMemoryMB() {
-    // Dart 无法直接获取系统内存，使用平台默认值
-    if (Platform.isMacOS) {
-      if (isAppleSilicon) {
-        // M 系列芯片通常 8GB-192GB
-        return 16 * 1024; // 假设 16GB
+    try {
+      if (Platform.isMacOS) {
+        final result = Process.runSync('sysctl', ['-n', 'hw.memsize']);
+        if (result.exitCode == 0) {
+          final bytes = int.tryParse(result.stdout.toString().trim());
+          if (bytes != null) return bytes ~/ (1024 * 1024);
+        }
+      } else if (Platform.isLinux) {
+        final file = File('/proc/meminfo');
+        if (file.existsSync()) {
+          final content = file.readAsStringSync();
+          final match = RegExp(r'MemTotal:\s+(\d+)').firstMatch(content);
+          if (match != null) {
+            return int.parse(match.group(1)!) ~/ 1024;
+          }
+        }
+      } else if (Platform.isWindows) {
+        final result = Process.runSync('wmic', ['OS', 'get', 'TotalVisibleMemorySize', '/Value']);
+        if (result.exitCode == 0) {
+          final match = RegExp(r'TotalVisibleMemorySize=(\d+)').firstMatch(result.stdout.toString());
+          if (match != null) {
+            return int.parse(match.group(1)!) ~/ 1024;
+          }
+        }
       }
-      return 8 * 1024; // Intel Mac 假设 8GB
-    } else if (Platform.isIOS) {
-      return 4 * 1024; // iOS 设备假设 4GB
-    } else if (Platform.isAndroid) {
-      return 6 * 1024; // Android 设备假设 6GB
-    } else if (Platform.isWindows || Platform.isLinux) {
-      return 16 * 1024; // Windows/Linux 假设 16GB
-    }
-    return 8 * 1024; // 默认 8GB
+    } catch (_) {}
+
+    if (Platform.isMacOS) return isAppleSilicon ? 16 * 1024 : 8 * 1024;
+    if (Platform.isIOS) return 4 * 1024;
+    if (Platform.isAndroid) return 6 * 1024;
+    if (Platform.isWindows || Platform.isLinux) return 16 * 1024;
+    return 8 * 1024;
   }
 
-  /// 获取可用显存估算（MB）
-  static int _getAvailableVRAM() {
+  static int _getAvailableMemoryMB() {
+    try {
+      if (Platform.isMacOS) {
+        final result = Process.runSync('vm_stat', []);
+        if (result.exitCode == 0) {
+          final output = result.stdout.toString();
+          final freeMatch = RegExp(r'free\s*=\s*(\d+)').firstMatch(output);
+          final inactiveMatch = RegExp(r'inactive\s*=\s*(\d+)').firstMatch(output);
+          if (freeMatch != null && inactiveMatch != null) {
+            final free = int.parse(freeMatch.group(1)!);
+            final inactive = int.parse(inactiveMatch.group(1)!);
+            return ((free + inactive) * 4096) ~/ (1024 * 1024);
+          }
+        }
+      } else if (Platform.isLinux) {
+        final file = File('/proc/meminfo');
+        if (file.existsSync()) {
+          final content = file.readAsStringSync();
+          final availableMatch = RegExp(r'MemAvailable:\s+(\d+)').firstMatch(content);
+          if (availableMatch != null) {
+            return int.parse(availableMatch.group(1)!) ~/ 1024;
+          }
+        }
+      }
+    } catch (_) {}
+
+    return (systemMemoryMB * 0.5).toInt();
+  }
+
+  static int get availableVRAMMB {
     if (Platform.isMacOS && isAppleSilicon) {
-      // Apple Silicon 统一内存，通常可使用 50-75%
-      final systemMem = _getSystemMemoryMB();
-      return (systemMem * 0.6).toInt(); // 60% 可用于 GPU
-    } else if (Platform.isAndroid) {
-      // Android Vulkan 通常 2-4GB
-      return 2 * 1024;
-    } else if (Platform.isWindows || Platform.isLinux) {
-      // Windows/Linux CUDA 通常 4-24GB
-      return 8 * 1024; // 假设 8GB
+      return (availableMemoryMB * 0.7).toInt();
     }
-    return 0; // CPU only
+    if (Platform.isIOS) return (availableMemoryMB * 0.5).toInt();
+    if (Platform.isAndroid) return 2048;
+    if (Platform.isWindows || Platform.isLinux) {
+      return _getCudaVRAMMB() ?? 4096;
+    }
+    return 0;
   }
 
-  /// 推荐的最大 GPU 层数
-  static int recommendedGpuLayers() {
-    if (isAppleSilicon) return 100; // M 系列芯片可全量卸载
-    if (Platform.isIOS) return 50; // iOS 保守设置
+  static int? _getCudaVRAMMB() {
+    return 8192;
+  }
 
-    // 其他平台根据显存计算
-    if (supportsGpuOffload) {
-      final vram = _getAvailableVRAM();
-      // 每层大约需要 100-200MB，保守估计
-      if (vram >= 8 * 1024) return 100; // 8GB+ 全量
-      if (vram >= 4 * 1024) return 50; // 4GB 半量
-      if (vram >= 2 * 1024) return 25; // 2GB 部分
+  static int recommendedGpuLayers({int? modelSizeMB, int? modelLayers}) {
+    if (!supportsGpuOffload) return 0;
+
+    final vram = availableVRAMMB;
+    int usableVram = vram;
+
+    if (modelSizeMB != null) {
+      usableVram = vram - modelSizeMB;
+      if (usableVram < 0) return 0;
     }
 
-    return 0; // 不支持 GPU 或显存不足
+    if (modelLayers != null) {
+      final vramPerLayer = modelSizeMB != null ? (modelSizeMB * 1.2) / modelLayers : 150;
+      final maxLayers = (usableVram / vramPerLayer).floor();
+      return maxLayers.clamp(0, modelLayers);
+    }
+
+    if (Platform.isMacOS && isAppleSilicon) return 99;
+    if (Platform.isIOS) return 40;
+
+    if (usableVram >= 12 * 1024) return 99;
+    if (usableVram >= 8 * 1024) return 60;
+    if (usableVram >= 6 * 1024) return 40;
+    if (usableVram >= 4 * 1024) return 25;
+    if (usableVram >= 2 * 1024) return 10;
+    return 0;
   }
 
-  /// 推荐的上下文长度
-  static int recommendedContextLength() {
-    if (isAppleSilicon) return 8192; // M 系列支持大上下文
-    if (Platform.isIOS) return 2048; // iOS 限制上下文
+  static int recommendedContextLength({int? modelSizeMB}) {
+    final mem = availableMemoryMB;
+    int usableMem = mem;
 
-    final vram = _getAvailableVRAM();
-    if (vram >= 8 * 1024) return 8192;
-    if (vram >= 4 * 1024) return 4096;
-    return 2048;
+    if (modelSizeMB != null) {
+      usableMem = mem - modelSizeMB;
+    }
+
+    if (Platform.isIOS || Platform.isAndroid) {
+      if (usableMem >= 4 * 1024) return 4096;
+      if (usableMem >= 2 * 1024) return 2048;
+      return 1024;
+    }
+
+    if (usableMem >= 16 * 1024) return 16384;
+    if (usableMem >= 12 * 1024) return 8192;
+    if (usableMem >= 8 * 1024) return 4096;
+    if (usableMem >= 4 * 1024) return 2048;
+    return 1024;
   }
 
-  /// 推荐的批次大小
-  static int recommendedBatchSize() {
-    if (isAppleSilicon) return 1024;
-    if (Platform.isIOS) return 256;
+  static int recommendedBatchSize({bool useGpu = true}) {
+    if (useGpu && supportsGpuOffload) {
+      if (Platform.isMacOS && isAppleSilicon) {
+        return 512;
+      }
+      if (Platform.isIOS) return 64;
+      if (availableVRAMMB >= 8 * 1024) return 512;
+      if (availableVRAMMB >= 4 * 1024) return 256;
+      return 128;
+    }
 
-    final vram = _getAvailableVRAM();
-    if (vram >= 8 * 1024) return 1024;
-    if (vram >= 4 * 1024) return 512;
-    return 256;
+    if (Platform.numberOfProcessors >= 8) return 512;
+    if (Platform.numberOfProcessors >= 4) return 256;
+    return 128;
   }
 
-  /// 推荐的线程数
   static int recommendedThreads() {
-    if (Platform.isMacOS || Platform.isLinux) {
-      // Unix-like 系统可以获取 CPU 核心数
-      try {
-        // 使用物理核心数的 75%
-        final cores = Platform.numberOfProcessors;
-        return (cores * 0.75).ceil().clamp(2, 16);
-      } catch (_) {
-        return 4;
-      }
-    } else if (Platform.isWindows) {
-      try {
-        final cores = Platform.numberOfProcessors;
-        return (cores * 0.75).ceil().clamp(2, 16);
-      } catch (_) {
-        return 4;
-      }
-    } else if (Platform.isAndroid) {
-      // Android 通常 4-8 核心
-      return Platform.numberOfProcessors.clamp(2, 4);
-    } else if (Platform.isIOS) {
-      // iOS 通常 4-6 核心
-      return Platform.numberOfProcessors.clamp(2, 4);
-    }
-    return 4;
+    final cores = Platform.numberOfProcessors;
+    if (cores <= 2) return cores;
+    if (cores <= 4) return cores - 1;
+    return (cores * 0.75).ceil().clamp(2, 16);
   }
 
-  /// 创建默认后端配置
-  static LlamaBackendConfig createDefaultBackendConfig() {
-    if (Platform.isMacOS) {
-      return LlamaBackendConfig.defaultMacOS();
-    } else if (Platform.isAndroid) {
-      return LlamaBackendConfig.defaultAndroid();
-    } else if (Platform.isWindows) {
-      return LlamaBackendConfig.defaultWindows();
-    } else if (Platform.isLinux) {
-      return LlamaBackendConfig.defaultLinux();
-    } else if (Platform.isIOS) {
-      return LlamaBackendConfig.defaultIOS();
-    }
-    return const LlamaBackendConfig();
+  static int recommendedUBatchSize() {
+    return 128;
   }
 
-  /// 检测硬件加速支持
   static HardwareAcceleration detectHardwareAcceleration() {
-    if (!supportsGpuOffload) {
-      return HardwareAcceleration.cpu;
-    }
+    if (!supportsGpuOffload) return HardwareAcceleration.cpu;
+    if (Platform.isMacOS || Platform.isIOS) return HardwareAcceleration.metal;
+    if (Platform.isAndroid) return HardwareAcceleration.vulkan;
+    return HardwareAcceleration.cuda;
+  }
 
-    if (Platform.isMacOS || Platform.isIOS) {
-      return HardwareAcceleration.metal;
-    } else if (Platform.isAndroid) {
-      return HardwareAcceleration.vulkan;
-    } else if (Platform.isWindows) {
-      // Windows 优先检测 CUDA
-      try {
-        // 这里可以添加 CUDA 检测逻辑
-        return HardwareAcceleration.cuda;
-      } catch (_) {
-        // 回退到其他 GPU 支持
-        return HardwareAcceleration.vulkan;
-      }
-    } else if (Platform.isLinux) {
-      // Linux 检查 CUDA 或 Vulkan
-      try {
-        // 这里可以添加 CUDA 检测逻辑
-        return HardwareAcceleration.cuda;
-      } catch (_) {
-        return HardwareAcceleration.vulkan;
-      }
-    }
-    return HardwareAcceleration.cpu;
+  static String getHardwareInfo() {
+    final buffer = StringBuffer();
+    buffer.writeln('Platform: $currentPlatform');
+    buffer.writeln('CPU Cores: ${Platform.numberOfProcessors}');
+    buffer.writeln('System Memory: ${systemMemoryMB}MB');
+    buffer.writeln('Available Memory: ${availableMemoryMB}MB');
+    buffer.writeln('Available VRAM: ${availableVRAMMB}MB');
+    buffer.writeln('GPU Offload: ${supportsGpuOffload ? 'Supported' : 'Not Supported'}');
+    buffer.writeln('Hardware Acceleration: ${detectHardwareAcceleration()}');
+    if (Platform.isMacOS) buffer.writeln('Apple Silicon: $isAppleSilicon');
+    return buffer.toString();
+  }
+
+  static LlamaBackendConfig createDefaultBackendConfig() {
+    if (Platform.isMacOS) return LlamaBackendConfig.defaultMacOS();
+    if (Platform.isAndroid) return LlamaBackendConfig.defaultAndroid();
+    if (Platform.isWindows) return LlamaBackendConfig.defaultWindows();
+    if (Platform.isLinux) return LlamaBackendConfig.defaultLinux();
+    if (Platform.isIOS) return LlamaBackendConfig.defaultIOS();
+    return const LlamaBackendConfig();
   }
 }

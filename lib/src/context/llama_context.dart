@@ -5,6 +5,7 @@ import 'package:ffi/ffi.dart';
 
 import 'package:llama_native/llama_native_bindings.dart' as bindings;
 import 'package:llama_native/src/backend/llama_backend.dart';
+import 'package:llama_native/src/backend/llama_backend_config.dart';
 import 'package:llama_native/src/model/llama_model.dart';
 import 'package:llama_native/src/context/inference_config.dart';
 import 'package:llama_native/src/context/token_generation.dart';
@@ -30,35 +31,38 @@ class LlamaContext with Disposable {
   /// 私有构造函数
   LlamaContext._(this._model, this._config) : _logger = Logger('LlamaContext');
 
-  /// 创建上下文（同步）
   factory LlamaContext.create(LlamaModel model, InferenceConfig config) {
     final context = LlamaContext._(model, config);
     context._initialize();
     return context;
   }
 
-  /// 初始化上下文
   void _initialize() {
     if (_ctxPtr != null) {
       throw StateError('Context already initialized');
     }
 
-    _logger.info('Creating context: n_ctx=${_config.nCtx}, n_batch=${_config.nBatch}');
+    _logger.info(
+      'Creating context: n_ctx=${_config.nCtx}, n_batch=${_config.nBatch}, n_gpu_layers=${_config.nGpuLayers}',
+    );
 
-    final backend = LlamaBackend.instance;
-    final ctxParams = backend.getContextParams(nCtx: _config.nCtx, nBatch: _config.nBatch, nThreads: _config.nThreads);
+    final backend = LlamaBackend.createWithConfig(LlamaBackendConfig.forGpuLayers(_config.nGpuLayers));
 
-    // 创建上下文
+    final ctxParams = backend.getContextParams(
+      nCtx: _config.nCtx,
+      nBatch: _config.nBatch,
+      nUBatch: _config.nUBatch,
+      nThreads: _config.nThreads,
+    );
+
     final ptr = bindings.llama_init_from_model(_model.handle, ctxParams);
     if (ptr == nullptr) {
       throw LlamaContextInitException('llama_init_from_model returned null');
     }
     _ctxPtr = ptr;
 
-    // 使用 llama.cpp 内置 sampler chain 初始化采样器
     _samplerChain = _buildSamplerChain(_config.sampling);
 
-    // 初始化 KV Cache 管理器
     _kvCache = KVCacheManager(nCtx: _config.nCtx, ctx: _ctxPtr);
 
     _logger.info('Context initialized');
