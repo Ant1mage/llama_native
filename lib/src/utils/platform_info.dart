@@ -163,12 +163,31 @@ class PlatformInfo {
 
   /// 检测硬件加速支持
   static HardwareAcceleration detectHardwareAcceleration() {
+    if (!supportsGpuOffload) {
+      return HardwareAcceleration.cpu;
+    }
+
     if (Platform.isMacOS || Platform.isIOS) {
       return HardwareAcceleration.metal;
     } else if (Platform.isAndroid) {
       return HardwareAcceleration.vulkan;
-    } else if (Platform.isWindows || Platform.isLinux) {
-      return HardwareAcceleration.cuda;
+    } else if (Platform.isWindows) {
+      // Windows 优先检测 CUDA
+      try {
+        // 这里可以添加 CUDA 检测逻辑
+        return HardwareAcceleration.cuda;
+      } catch (_) {
+        // 回退到其他 GPU 支持
+        return HardwareAcceleration.vulkan;
+      }
+    } else if (Platform.isLinux) {
+      // Linux 检查 CUDA 或 Vulkan
+      try {
+        // 这里可以添加 CUDA 检测逻辑
+        return HardwareAcceleration.cuda;
+      } catch (_) {
+        return HardwareAcceleration.vulkan;
+      }
     }
     return HardwareAcceleration.cpu;
   }

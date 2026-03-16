@@ -1,0 +1,222 @@
+name: Build Llama Native Libraries
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "b*"
+
+jobs:
+  build-apple:
+    name: Build for Apple Platforms
+    runs-on: macos-latest
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ github.ref_name }}
+          path: llama.cpp
+          submodules: true
+
+      - name: Build macOS dylib
+        run: |
+          cd llama.cpp
+          mkdir -p build-macos && cd build-macos
+
+          cmake .. \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_METAL=ON \
+            -DGGML_NATIVE=OFF
+
+          cmake --build . --config Release --target llama --parallel
+
+      - name: Build iOS dylib
+        run: |
+          cd llama.cpp
+
+          # iOS Device (arm64)
+          mkdir -p build-ios-device && cd build-ios-device
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_METAL=ON \
+            -DGGML_NATIVE=OFF
+          cmake --build . --config Release --target llama --parallel
+          cd ..
+
+          # iOS Simulator (arm64 + x86_64)
+          mkdir -p build-ios-sim && cd build-ios-sim
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_SYSROOT=iphonesimulator \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF
+          cmake --build . --config Release --target llama --parallel
+
+      - name: Package Artifacts
+        run: |
+          mkdir -p artifacts
+
+          # macOS dylib (universal)
+          find llama.cpp/build-macos/bin -name "*.dylib" -exec cp {} artifacts/libllama.dylib \;
+          tar -czvf llama-${{ github.ref_name }}-macos.tar.gz -C artifacts libllama.dylib
+          rm artifacts/*
+
+          # iOS Device dylib
+          find llama.cpp/build-ios-device/bin -name "*.dylib" -exec cp {} artifacts/libllama.dylib \;
+          tar -czvf llama-${{ github.ref_name }}-ios-device.tar.gz -C artifacts libllama.dylib
+          rm artifacts/*
+
+          # iOS Simulator dylib
+          find llama.cpp/build-ios-sim/bin -name "*.dylib" -exec cp {} artifacts/libllama.dylib \;
+          tar -czvf llama-${{ github.ref_name }}-ios-simulator.tar.gz -C artifacts libllama.dylib
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: llama-*.tar.gz
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-android:
+    name: Build for Android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ github.ref_name }}
+          path: llama.cpp
+          submodules: true
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build Library
+        shell: bash
+        run: |
+          cd llama.cpp
+          mkdir -p build-android && cd build-android
+
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF
+
+          cmake --build . --config Release --target llama --parallel
+
+      - name: Package Artifact
+        run: |
+          mkdir -p output
+          find llama.cpp/build-android/bin -name "*.so" -exec cp {} output/ \;
+          tar -czvf llama-${{ github.ref_name }}-android-arm64.tar.gz -C output .
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: llama-*.tar.gz
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux:
+    name: Build for Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ github.ref_name }}
+          path: llama.cpp
+          submodules: true
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+
+      - name: Build Library
+        shell: bash
+        run: |
+          cd llama.cpp
+          mkdir -p build && cd build
+
+          cmake .. \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DGGML_NATIVE=OFF
+
+          cmake --build . --config Release --target llama --parallel
+
+      - name: Package Artifact
+        run: |
+          mkdir -p output
+          find llama.cpp/build/bin -name "*.so" -exec cp {} output/ \;
+          tar -czvf llama-${{ github.ref_name }}-linux-x64.tar.gz -C output .
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: llama-*.tar.gz
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-windows:
+    name: Build for Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ github.ref_name }}
+          path: llama.cpp
+          submodules: true
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build Library
+        shell: bash
+        run: |
+          cd llama.cpp
+          mkdir -p build && cd build
+
+          cmake .. \
+            -G "Visual Studio 17 2022" \
+            -A x64 \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON \
+            -DGGML_NATIVE=OFF
+
+          cmake --build . --config Release --target llama
+
+      - name: Package Artifact
+        shell: bash
+        run: |
+          mkdir -p output
+          find llama.cpp/build/bin/Release -name "*.dll" -exec cp {} output/ \;
+          tar -czvf llama-${{ github.ref_name }}-windows-x64.tar.gz -C output .
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: llama-*.tar.gz
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -38,13 +38,10 @@ void main(List<String> args) async {
       return;
     }
 
-    // 判断是否为模拟器（iOS/macOS）
+    // 判断是否为模拟器
     bool isSimulator = false;
     if (targetOS == 'ios') {
       isSimulator = targetArch == 'x86_64';
-    } else if (targetOS == 'macos') {
-      // macOS 可以根据需要区分，或者统一使用 arm64+x86_64 的 framework
-      isSimulator = false; // macOS 通常不严格区分
     }
 
     // 创建平台配置
@@ -208,6 +205,10 @@ Future<void> runFfigen(String packageRoot) async {
   }
 }
 
+/// 获取二进制文件存储目录 .binary/{tag}/
+Directory getBinaryDirectory(String packageRoot, String tagName) {
+  return Directory(p.join(packageRoot, '.binary', tagName));
+}
 
 /// 获取下载 URL
 String getDownloadUrl(PlatformConfig config, String tagName) {
@@ -245,7 +246,7 @@ Future<File> downloadFile(String url, String destinationPath) async {
     }
 
     final file = File(destinationPath);
-    await file.create(recursive: true);
+    await file.parent.create(recursive: true);
     await response.pipe(file.openWrite());
 
     print('✅ 下载完成：$destinationPath');
@@ -255,19 +256,25 @@ Future<File> downloadFile(String url, String destinationPath) async {
   }
 }
 
-/// 解压文件
+/// 解压 tar.gz 文件
 Future<void> extractArchive(File archiveFile, String extractPath) async {
   print('📦 开始解压：${archiveFile.path}');
   final bytes = await archiveFile.readAsBytes();
   final archive = TarDecoder().decodeBytes(bytes);
 
   for (final file in archive) {
+    final filePath = p.join(extractPath, file.name);
+
     if (file.isFile) {
-      final filename = p.join(extractPath, file.name);
-      await File(filename).create(recursive: true);
-      await File(filename).writeAsBytes(file.content);
+      final outFile = File(filePath);
+      await outFile.parent.create(recursive: true);
+      await outFile.writeAsBytes(file.content);
+      // 保留可执行权限
+      if (file.mode & 0x111 != 0) {
+        await Process.run('chmod', ['+x', filePath]);
+      }
     } else {
-      await Directory(p.join(extractPath, file.name)).create(recursive: true);
+      await Directory(filePath).create(recursive: true);
     }
   }
 
@@ -275,25 +282,30 @@ Future<void> extractArchive(File archiveFile, String extractPath) async {
 }
 
 /// 查找并处理库文件
-Future<File?> findAndCopyLibrary(String extractPath, String targetOS, String tempDir) async {
+/// 所有平台统一使用动态库：.dylib (macOS/iOS), .so (Android/Linux), .dll (Windows)
+Future<File?> findAndCopyLibrary(String extractPath, String targetOS, String destDir) async {
   final extractDir = Directory(extractPath);
-  final files = extractDir.listSync(recursive: true);
 
+  if (!await extractDir.exists()) {
+    return null;
+  }
+
+  final files = extractDir.listSync(recursive: true);
+  final libName = _getLibraryName(targetOS);
+
+  // 查找动态库文件
   for (final entity in files) {
     if (entity is File) {
       final ext = p.extension(entity.path);
       final basename = p.basename(entity.path);
 
-      // 检查是否是目标库文件
-      final isLlamaLib =
-          basename.contains('llama') && (ext == '.dylib' || ext == '.so' || ext == '.dll' || ext == '.a');
+      final isSharedLib = ext == '.dylib' || ext == '.so' || ext == '.dll';
+      final isLlamaLib = basename.contains('llama') || basename.startsWith('lib');
 
-      if (isLlamaLib) {
-        // 复制并重命名
-        final libName = _getLibraryName(targetOS);
-        final newPath = p.join(tempDir, libName);
-
+      if (isSharedLib && isLlamaLib) {
+        final newPath = p.join(destDir, libName);
         print('📋 复制库文件：${p.basename(entity.path)} -> $libName');
+        await File(newPath).parent.create(recursive: true);
         await entity.copy(newPath);
         return File(newPath);
       }
@@ -315,17 +327,28 @@ String _getLibraryName(String os) {
 Future<File> processPlatform(PlatformConfig config, String packageRoot, String tagName) async {
   print('\n========== 处理平台：${config.os}_${config.arch}${config.isSimulator ? '_simulator' : ''} ==========');
 
+  // 获取二进制存储目录 .binary/{tag}/
+  final binaryDir = getBinaryDirectory(packageRoot, tagName);
+  final platformDirName = '${config.os}_${config.arch}${config.isSimulator ? '_simulator' : ''}';
+  final platformDir = Directory(p.join(binaryDir.path, platformDirName));
+
+  // 检查是否已下载
+  final cachedLib = await _checkCachedLibrary(platformDir.path, config.os);
+  if (cachedLib != null) {
+    print('✅ 使用缓存的库文件：${cachedLib.path}');
+    return cachedLib;
+  }
+
   // 获取下载链接
   final downloadUrl = getDownloadUrl(config, tagName);
 
-  // 临时目录
-  final tempDir = await Directory.systemTemp.createTemp('llama_cpp_');
-  final archivePath = p.join(tempDir.path, 'llama_lib.tar.gz');
-  final extractPath = p.join(tempDir.path, 'extracted');
+  // 创建下载和解压目录
+  final archivePath = p.join(binaryDir.path, 'downloads', _getArtifactName(config, tagName));
+  final extractPath = p.join(binaryDir.path, 'extracted', platformDirName);
 
   try {
-    // 创建提取目录
-    await Directory(extractPath).create(recursive: true);
+    // 创建目录
+    await platformDir.create(recursive: true);
 
     // 下载
     final archiveFile = await downloadFile(downloadUrl, archivePath);
@@ -333,22 +356,35 @@ Future<File> processPlatform(PlatformConfig config, String packageRoot, String t
     // 解压
     await extractArchive(archiveFile, extractPath);
 
-    // 查找并复制库文件
-    final libFile = await findAndCopyLibrary(extractPath, config.os, tempDir.path);
+    // 查找并复制库文件到目标目录
+    final libFile = await findAndCopyLibrary(extractPath, config.os, platformDir.path);
 
     if (libFile == null) {
       throw Exception('❌ 未找到库文件');
     }
 
     print('✅ 平台 ${config.os}_${config.arch} 处理完成');
+    print('📂 库文件位置：${libFile.path}');
     return libFile;
   } catch (e) {
     print('❌ 处理平台 ${config.os}_${config.arch} 失败：$e');
     rethrow;
-  } finally {
-    // 清理临时目录
-    if (await tempDir.exists()) {
-      await tempDir.delete(recursive: true);
-    }
   }
+}
+
+/// 检查缓存的库文件
+Future<File?> _checkCachedLibrary(String platformDir, String targetOS) async {
+  final dir = Directory(platformDir);
+
+  if (!await dir.exists()) {
+    return null;
+  }
+
+  final libName = _getLibraryName(targetOS);
+  final libPath = p.join(platformDir, libName);
+  if (await File(libPath).exists()) {
+    return File(libPath);
+  }
+
+  return null;
 }

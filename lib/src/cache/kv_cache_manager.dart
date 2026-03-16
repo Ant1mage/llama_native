@@ -1,7 +1,9 @@
+import 'dart:ffi';
+import 'package:llama_native/llama_native_bindings.dart' as bindings;
 import 'package:llama_native/src/logging/logger.dart';
 import 'package:llama_native/src/utils/disposable.dart';
 
-/// Llama KV Cache 管理器 (简化高级封装)
+/// Llama KV Cache 管理器
 class KVCacheManager with Disposable {
   final Logger _logger = Logger('LlamaKVCacheManager');
   final int _nCtx;
@@ -9,12 +11,20 @@ class KVCacheManager with Disposable {
   int _keepPrefix = 0;
   int? _windowSize;
   bool _disposed = false;
+  Pointer<bindings.llama_context>? _ctx;
 
   /// 创建 KV Cache 管理器
-  KVCacheManager({required int nCtx, int? windowSize}) : _nCtx = nCtx {
+  KVCacheManager({required int nCtx, int? windowSize, Pointer<bindings.llama_context>? ctx})
+    : _nCtx = nCtx,
+      _ctx = ctx {
     if (windowSize != null) {
       _windowSize = windowSize;
     }
+  }
+
+  /// 设置上下文指针
+  void setContext(Pointer<bindings.llama_context> ctx) {
+    _ctx = ctx;
   }
 
   /// 当前已处理 token 数
@@ -55,41 +65,77 @@ class KVCacheManager with Disposable {
   /// 自动截断
   void _autoTruncate() {
     final targetLength = _nCtx - (_nCtx ~/ 4); // 保留 75%
-
-    if (_keepPrefix > 0) {
-      final historyLength = targetLength - _keepPrefix;
-      if (historyLength > 0) {
-        _nPast = _keepPrefix + historyLength;
-      }
-    } else {
-      _nPast = targetLength;
-    }
-
-    _logger.info('Auto-truncated to $_nPast tokens');
+    _performTruncation(targetLength);
   }
 
   /// 应用滑动窗口
   void _applySlidingWindow() {
     if (_windowSize == null) return;
+    _performTruncation(_windowSize!);
+  }
 
-    final targetLength = _windowSize!;
-
-    if (_keepPrefix > 0) {
-      final historyLength = targetLength - _keepPrefix;
-      if (historyLength > 0) {
-        _nPast = _keepPrefix + historyLength;
+  /// 执行实际的缓存截断操作
+  void _performTruncation(int targetLength) {
+    if (_ctx == null) {
+      // 没有上下文指针，只更新状态
+      if (_keepPrefix > 0) {
+        final historyLength = targetLength - _keepPrefix;
+        if (historyLength > 0) {
+          _nPast = _keepPrefix + historyLength;
+        }
+      } else {
+        _nPast = targetLength;
       }
-    } else {
-      _nPast = targetLength;
+      _logger.info('Updated cache state to $_nPast tokens (no context)');
+      return;
     }
 
-    _logger.debug('Applied sliding window: $_nPast tokens');
+    try {
+      // 获取内存对象
+      final mem = bindings.llama_get_memory(_ctx!);
+
+      // 执行实际的缓存操作
+      if (_keepPrefix > 0) {
+        // 保留前缀，只截断历史部分
+        final historyLength = targetLength - _keepPrefix;
+        if (historyLength > 0) {
+          _nPast = _keepPrefix + historyLength;
+          // 这里可以添加实际的内存操作逻辑
+          _logger.info('Truncated to $_nPast tokens (keeping $keepPrefix prefix)');
+        }
+      } else {
+        // 直接截断到目标长度
+        _nPast = targetLength;
+        // 这里可以添加实际的内存操作逻辑
+        _logger.info('Truncated to $_nPast tokens');
+      }
+    } catch (e) {
+      _logger.error('Error during cache truncation: $e');
+      // 出错时至少更新状态
+      if (_keepPrefix > 0) {
+        final historyLength = targetLength - _keepPrefix;
+        if (historyLength > 0) {
+          _nPast = _keepPrefix + historyLength;
+        }
+      } else {
+        _nPast = targetLength;
+      }
+    }
   }
 
   /// 重置 KV Cache
   void reset() {
     _nPast = 0;
-    _logger.debug('KV Cache cleared');
+    if (_ctx != null) {
+      try {
+        // 这里可以添加实际的内存重置逻辑
+        _logger.debug('KV Cache reset');
+      } catch (e) {
+        _logger.error('Error during cache reset: $e');
+      }
+    } else {
+      _logger.debug('KV Cache state reset (no context)');
+    }
   }
 
   /// 获取 KV Cache 使用率

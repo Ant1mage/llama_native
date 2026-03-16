@@ -99,8 +99,20 @@ class LlamaModel with Disposable {
     _logger.info('Loading model: ${_config.modelPath}');
 
     // 验证文件存在
-    if (!File(_config.modelPath).existsSync()) {
+    final modelFile = File(_config.modelPath);
+    if (!modelFile.existsSync()) {
       throw FileSystemException('Model file not found', _config.modelPath);
+    }
+
+    // 验证文件权限
+    try {
+      final fileStat = modelFile.statSync();
+      if (!fileStat.modeString().contains('r')) {
+        throw FileSystemException('Model file is not readable', _config.modelPath);
+      }
+    } catch (e) {
+      _logger.error('Error checking file permissions: $e');
+      throw FileSystemException('Failed to access model file', _config.modelPath);
     }
 
     // 获取后端配置
@@ -119,18 +131,24 @@ class LlamaModel with Disposable {
 
       if (ptr == nullptr) {
         _logger.error('Failed to load model: ${_config.modelPath}');
-        calloc.free(pathC);
-        throw LlamaModelLoadException('Failed to load model from file');
+        throw LlamaModelLoadException('Failed to load model from file', filePath: _config.modelPath);
       }
 
       _modelPtr = ptr;
       _logger.info('Model loaded successfully');
 
       // 打印模型信息
-      final metadata = getMetadata();
-      _logger.info('Model: ${metadata.name}');
-      _logger.info('Parameters: ${metadata.parameterCount.toStringAsFixed(1)}B');
-      _logger.info('Context: ${metadata.contextLength}, Vocab: ${metadata.vocabSize}');
+      try {
+        final metadata = getMetadata();
+        _logger.info('Model: ${metadata.name}');
+        _logger.info('Parameters: ${metadata.parameterCount.toStringAsFixed(1)}B');
+        _logger.info('Context: ${metadata.contextLength}, Vocab: ${metadata.vocabSize}');
+      } catch (e) {
+        _logger.warning('Failed to get model metadata: $e');
+      }
+    } catch (e) {
+      _logger.error('Error loading model: $e');
+      rethrow;
     } finally {
       calloc.free(pathC);
     }
@@ -210,6 +228,7 @@ class LlamaModel with Disposable {
   /// Tokenize 文本
   List<int> tokenize(String text, {bool addBos = true, bool addEos = false}) {
     if (_disposed) throw StateError('Model is disposed');
+    if (text.isEmpty) return [];
 
     // 必须用 UTF-8 字节长度，Dart String.length 是 UTF-16 码元数，对多字节字符会偏小
     final textC = text.toNativeUtf8();
@@ -231,7 +250,8 @@ class LlamaModel with Disposable {
         );
 
         if (n < 0) {
-          throw LlamaTokenizeException('Tokenization failed for text: $text (code=$n)');
+          _logger.error('Tokenization failed with code: $n for text: $text');
+          throw LlamaTokenizeException('Tokenization failed for text (code=$n)', text: text);
         }
 
         // 转换为 Dart List
@@ -240,9 +260,15 @@ class LlamaModel with Disposable {
           result.add(tokens.elementAt(i).value);
         }
         return result;
+      } catch (e) {
+        _logger.error('Error during tokenization: $e');
+        throw LlamaTokenizeException('Tokenization failed: ${e.toString()}');
       } finally {
         calloc.free(tokens);
       }
+    } catch (e) {
+      _logger.error('Error in tokenize method: $e');
+      rethrow;
     } finally {
       calloc.free(textC);
     }
@@ -256,37 +282,46 @@ class LlamaModel with Disposable {
     final buffer = StringBuffer();
 
     for (final token in tokens) {
-      // 先获取所需缓冲区大小
-      final bufferSize = bindings.llama_token_to_piece(
-        vocab,
-        token,
-        nullptr,
-        0,
-        0, // lstrip
-        false, // special
-      );
-
-      if (bufferSize <= 0) continue;
-
-      // 分配缓冲区并获取文本
-      final pieceBuffer = calloc<Char>(bufferSize);
       try {
-        final actualSize = bindings.llama_token_to_piece(
+        // 先获取所需缓冲区大小
+        final bufferSize = bindings.llama_token_to_piece(
           vocab,
           token,
-          pieceBuffer,
-          bufferSize,
+          nullptr,
+          0,
           0, // lstrip
           false, // special
         );
 
-        if (actualSize > 0) {
-          // 转换为 Dart 字符串
-          final stringBytes = Uint8List.fromList(List.generate(actualSize, (i) => pieceBuffer.elementAt(i).value));
-          buffer.write(String.fromCharCodes(stringBytes));
+        if (bufferSize <= 0) {
+          _logger.debug('Invalid token: $token (bufferSize=$bufferSize)');
+          continue;
         }
-      } finally {
-        calloc.free(pieceBuffer);
+
+        // 分配缓冲区并获取文本
+        final pieceBuffer = calloc<Char>(bufferSize);
+        try {
+          final actualSize = bindings.llama_token_to_piece(
+            vocab,
+            token,
+            pieceBuffer,
+            bufferSize,
+            0, // lstrip
+            false, // special
+          );
+
+          if (actualSize > 0) {
+            // 转换为 Dart 字符串
+            final stringBytes = Uint8List.fromList(List.generate(actualSize, (i) => pieceBuffer.elementAt(i).value));
+            buffer.write(String.fromCharCodes(stringBytes));
+          }
+        } catch (e) {
+          _logger.error('Error detokenizing token $token: $e');
+        } finally {
+          calloc.free(pieceBuffer);
+        }
+      } catch (e) {
+        _logger.error('Error processing token $token: $e');
       }
     }
 

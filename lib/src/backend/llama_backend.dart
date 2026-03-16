@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:llama_native/llama_native_bindings.dart' as bindings;
 import 'package:llama_native/src/logging/logger.dart';
 import 'package:llama_native/src/utils/platform_info.dart';
+import 'package:llama_native/src/exceptions/llama_exceptions.dart';
 import 'llama_backend_config.dart';
 
 /// 全局硬件加速控制器
@@ -15,7 +16,7 @@ class LlamaBackend {
   bool _initialized = false;
 
   final Logger _logger = Logger('LlamaBackend');
-  final LlamaBackendConfig _config;
+  LlamaBackendConfig _config;
 
   /// 私有构造函数 (单例模式)
   LlamaBackend._(this._config);
@@ -32,11 +33,34 @@ class LlamaBackend {
   /// 使用自定义配置创建实例
   static LlamaBackend createWithConfig(LlamaBackendConfig config) {
     if (_instance != null) {
-      throw StateError('LlamaBackend already initialized. Use instance getter.');
+      // 如果已存在实例，先释放资源
+      _instance!._logger.info('Replacing existing backend with new config');
+      if (_instance!._initialized) {
+        _instance!.dispose();
+      }
     }
     _instance = LlamaBackend._(config);
     _instance!._logger.info('Initialized with custom config');
     return _instance!;
+  }
+
+  /// 重置后端实例
+  static void reset() {
+    if (_instance != null) {
+      if (_instance!._initialized) {
+        _instance!.dispose();
+      }
+      _instance = null;
+    }
+  }
+
+  /// 更新配置（需要重新初始化）
+  void updateConfig(LlamaBackendConfig newConfig) {
+    if (_initialized) {
+      dispose();
+    }
+    _config = newConfig;
+    _logger.info('Config updated, needs re-initialization');
   }
 
   /// 是否已初始化
@@ -67,18 +91,30 @@ class LlamaBackend {
 
       // 应用 NUMA 策略
       if (_config.numaStrategy != bindings.ggml_numa_strategy.GGML_NUMA_STRATEGY_DISABLED) {
-        bindings.llama_numa_init(_config.numaStrategy);
-        _logger.debug('NUMA strategy applied: ${_config.numaStrategy.name}');
+        try {
+          bindings.llama_numa_init(_config.numaStrategy);
+          _logger.debug('NUMA strategy applied: ${_config.numaStrategy.name}');
+        } catch (e) {
+          _logger.warning('Failed to apply NUMA strategy: $e');
+          // 继续执行，NUMA 失败不影响后端初始化
+        }
       }
 
       // 初始化 llama 后端
-      bindings.llama_backend_init();
-      _initialized = true;
+      try {
+        bindings.llama_backend_init();
+      } catch (e) {
+        throw LlamaBackendInitException('Failed to initialize llama backend', platform: currentPlatform);
+      }
 
+      _initialized = true;
       _logger.info('✅ Backend initialized successfully');
     } catch (e) {
       _logger.error('Failed to initialize backend: $e');
-      rethrow;
+      if (e is LlamaBackendInitException) {
+        rethrow;
+      }
+      throw LlamaBackendInitException(e.toString(), platform: currentPlatform);
     }
   }
 
