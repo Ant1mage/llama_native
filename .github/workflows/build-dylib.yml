@@ -40,7 +40,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p output
-          cp llama.cpp/build/bin/libllama.dylib output/
+          find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
           tar -czvf llama-${{ github.ref_name }}-macos-arm64.tar.gz -C output .
 
       - name: Upload to Release
@@ -86,7 +86,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p output
-          cp llama.cpp/build/bin/libllama.dylib output/
+          find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
           tar -czvf llama-${{ github.ref_name }}-macos-x64.tar.gz -C output .
 
       - name: Upload to Release
@@ -134,7 +134,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p output
-          cp llama.cpp/build/bin/libllama.dylib output/
+          find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
           tar -czvf llama-${{ github.ref_name }}-ios-device.tar.gz -C output .
 
       - name: Upload to Release
@@ -183,7 +183,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p output
-          cp llama.cpp/build/bin/libllama.dylib output/
+          find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
           tar -czvf llama-${{ github.ref_name }}-ios-simulator-arm64.tar.gz -C output .
 
       - name: Upload to Release
@@ -232,7 +232,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p output
-          cp llama.cpp/build/bin/libllama.dylib output/
+          find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
           tar -czvf llama-${{ github.ref_name }}-ios-simulator-x64.tar.gz -C output .
 
       - name: Upload to Release
