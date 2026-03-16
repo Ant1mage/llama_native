@@ -1,182 +1,204 @@
 import 'dart:io';
-import 'package:code_assets/code_assets.dart';
+import 'package:archive/archive.dart';
 import 'package:hooks/hooks.dart';
-import 'package:path/path.dart' as p;
+import 'package:http/http.dart' as http;
+import 'package:code_assets/code_assets.dart';
+
+/// ============================================================
+/// [LLAMA_NATIVE] 核心配置 - 修改此处即可驱动全流程
+/// ============================================================
+const String LLAMA_TAG = "b8369";
+const String PACKAGE_NAME = 'llama_native';
+const String ASSET_ID = 'llama_native';
+
+/// ============================================================
 
 void main(List<String> args) async {
-  await build(args, (input, output) async {
-    final targetOS = input.config.code.targetOS;
-    final targetArch = input.config.code.targetArchitecture;
-    final packageRoot = input.packageRoot.toFilePath();
+  await build(args, (config, output) async {
+    final os = config.config.code.targetOS;
+    final arch = config.config.code.targetArchitecture;
+    final isSimulator = _isSimulator(os, arch);
 
-    // 1. 设置构建目录 (放在 .dart_tool 目录下以保持工程整洁)
-    final buildDir = Directory(p.join(input.outputDirectory.toFilePath(), 'cmake_build'));
-    if (!buildDir.existsSync()) buildDir.createSync(recursive: true);
+    // 1. 同步 Git 子模块：确保 vendor/llama.cpp 源码处于正确的 TAG
+    log("同步 llama.cpp 子模块");
+    await _syncGitSubmodule(config.packageRoot);
 
-    print('🚀 Preparing [llama_native] for $targetOS-${targetArch.name}');
+    // 2. 自动化 Bindings：确保生成的 dart 代码与当前 C 头文件一致
+    log("生成 llama.cpp 的 bindings");
+    await _runFfigen(config.packageRoot);
 
-    // 2. 配置 CMake 参数 - 使用 llama.cpp 自带的 CMakeLists.txt
-    final cmakeArgs = <String>[
-      '-S', p.join(packageRoot, 'src', 'llama.cpp'),
-      '-B', buildDir.path,
-      '-DCMAKE_BUILD_TYPE=Release',
-      '-DBUILD_SHARED_LIBS=ON',
-      // 禁用不必要的组件以加速构建
-      '-DLLAMA_BUILD_TESTS=OFF',
-      '-DLLAMA_BUILD_EXAMPLES=OFF',
-      '-DLLAMA_BUILD_TOOLS=OFF',
-      '-DLLAMA_BUILD_SERVER=OFF',
-      // 启用核心库和通用工具
-      '-DLLAMA_BUILD_COMMON=ON',
-      // 禁用原生 CPU 优化（避免 macOS 上的 -mcpu=native 错误）
-      '-DGGML_NATIVE=OFF',
-      // macOS RPATH 配置：确保运行时能找到依赖库
-      '-DCMAKE_INSTALL_RPATH=@executable_path/../Frameworks;@loader_path/../Frameworks',
-      '-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON',
-      '-DCMAKE_INSTALL_NAME_DIR=@rpath',
-    ];
+    // 3. 确定存储目录与最终路径：.binaries/b4600/os_arch.so
+    final binariesDir = Directory.fromUri(config.packageRoot.resolve('.binaries/$LLAMA_TAG/'));
+    final libFileName = _getLibFileName(os, arch, isSimulator);
+    final File finalLibFile = File('${binariesDir.path}/$libFileName');
 
-    // 分平台配置
-    if (targetOS == OS.android) {
-      // Android NDK 配置
-      final androidNdkHome = Platform.environment['ANDROID_NDK_HOME'];
-      if (androidNdkHome != null) {
-        cmakeArgs.addAll([
-          '-DCMAKE_TOOLCHAIN_FILE=${p.join(androidNdkHome, 'build/cmake/android.toolchain.cmake')}',
-          '-DANDROID_ABI=${_mapAndroidAbi(targetArch)}',
-          '-DANDROID_PLATFORM=android-24',
-        ]);
-      }
-    } else if (targetOS == OS.iOS) {
-      // iOS 交叉编译配置
-      cmakeArgs.addAll([
-        '-DCMAKE_SYSTEM_NAME=iOS',
-        '-DCMAKE_OSX_ARCHITECTURES=${targetArch.name}',
-        '-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0',
-        '-DCMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH=NO',
-      ]);
-    } else if (targetOS == OS.macOS) {
-      // macOS 配置
-      final archFlag = switch (targetArch.name) {
-        'arm64' => 'arm64',
-        'x64' => 'x86_64',
-        _ => targetArch.name,
-      };
-      cmakeArgs.addAll([
-        '-DCMAKE_OSX_ARCHITECTURES=$archFlag',
-        '-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0',
-        // M1/M2 设备开启 Metal 支持
-        '-DGGML_METAL=ON',
-        '-DGGML_METAL_EMBED_LIBRARY=ON',
-      ]);
-    } else if (targetOS == OS.windows) {
-      // Windows 配置
-      if (targetArch == Architecture.arm64) {
-        cmakeArgs.add('-A ARM64');
-      }
-      cmakeArgs.add('-DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON');
-    } else if (targetOS == OS.linux) {
-      // Linux 配置
-      cmakeArgs.add('-DCMAKE_POSITION_INDEPENDENT_CODE=ON');
-      // 如果可用，启用 CUDA 支持
-      cmakeArgs.add('-DGGML_CUDA=OFF'); // 默认关闭，需要时可开启
+    // 4. 供应逻辑：如果文件不存在则下载，存在则跳过直接挂载
+    if (!finalLibFile.existsSync()) {
+      log('[$PACKAGE_NAME] 库文件不存在，准备下载 $LLAMA_TAG ($os-$arch)...');
+      final url = _getDownloadUrl(LLAMA_TAG, os, arch, isSimulator);
+      await _downloadAndProvision(url, finalLibFile, binariesDir, os, arch, isSimulator);
+    } else {
+      log('[$PACKAGE_NAME] 检测到本地库已就绪，直接挂载: $libFileName');
     }
 
-    // 3. 执行 CMake 配置与构建
-    print('📦 Configuring CMake...');
-    await _runCommand('cmake', cmakeArgs);
-
-    print('🔨 Building llama library...');
-    await _runCommand('cmake', ['--build', buildDir.path, '--config', 'Release', '--parallel']);
-
-    // 4. 定位生成的库文件
-    final libName = _getLibraryName(targetOS);
-    final libFile = _findLibrary(buildDir, libName, targetOS);
-
-    if (libFile == null) {
-      throw Exception('❌ Failed to find built library: $libName in ${buildDir.path}');
-    }
-
-    // 5. 注册资产 - 供 ffigen 生成的绑定使用
-    output.assets.code.add(
-      CodeAsset(package: 'llama_native', name: 'llama_native', linkMode: DynamicLoadingBundled(), file: libFile.uri),
-    );
-
-    // 6. 复制所有依赖的 dylib 文件（macOS 需要）- 排除主库避免重复
-    if (targetOS == OS.macOS) {
-      final binDir = p.join(buildDir.path, 'bin');
-      final allDylibs = Directory(
-        binDir,
-      ).listSync().whereType<File>().where((f) => f.path.endsWith('.dylib') && f.path != libFile.path);
-
-      for (final dylib in allDylibs) {
-        output.assets.code.add(
-          CodeAsset(
-            package: 'llama_native',
-            name: p.basename(dylib.path),
-            linkMode: DynamicLoadingBundled(),
-            file: dylib.uri,
-          ),
-        );
-      }
-      print('📦 Registered ${allDylibs.length} dependency dylib files for macOS');
-    }
-
-    // 7. 添加依赖文件（用于增量构建）
-    output.dependencies.add(Uri.file(p.join(packageRoot, 'src', 'llama.cpp', 'CMakeLists.txt')));
-
-    print('✅ Build Completed: ${libFile.path}');
+    // 5. 核心：通过 Native Assets 机制挂载
+    _registerAsset(output, os, arch, isSimulator, binariesDir);
   });
 }
 
-/// 辅助函数：执行系统命令
-Future<void> _runCommand(String executable, List<String> arguments) async {
-  final result = await Process.run(executable, arguments);
-  if (result.exitCode != 0) {
-    print('STDOUT: ${result.stdout}');
-    print('STDERR: ${result.stderr}');
-    throw ProcessException(executable, arguments, result.stderr, result.exitCode);
+/// --- 1. Git 子模块管理 ---
+Future<void> _syncGitSubmodule(Uri root) async {
+  final path = root.resolve('src/llama.cpp').toFilePath();
+  final gitDir = Directory('$path/.git');
+
+  // 如果子模块没初始化过，或者当前 HEAD 不是目标 TAG，则执行同步
+  log('[$PACKAGE_NAME] 检查子模块状态...');
+
+  final cmds = [
+    ['submodule', 'update', '--init', '--recursive'],
+    ['fetch', '--tags'],
+    ['checkout', LLAMA_TAG],
+  ];
+
+  for (var cmd in cmds) {
+    await Process.run('git', cmd, workingDirectory: path);
   }
 }
 
-/// 辅助函数：获取不同平台的库文件名
-String _getLibraryName(OS os) {
-  if (os == OS.android) return 'libllama.so';
-  if (os == OS.iOS) return 'libllama.dylib';
-  if (os == OS.macOS) return 'libllama.dylib';
-  if (os == OS.linux) return 'libllama.so';
-  if (os == OS.windows) return 'llama.dll';
-  if (os == OS.fuchsia) return 'libllama.so';
-  throw UnsupportedError('Unsupported OS: ${os.name}');
+/// --- 2. Ffigen 自动执行 ---
+Future<void> _runFfigen(Uri root) async {
+  // 注意：这里可以加入简单的缓存逻辑，比如判断头文件修改时间
+  log('[$PACKAGE_NAME] 正在生成/刷新 FFI 绑定代码...');
+  final res = await Process.run('dart', [
+    'run',
+    'ffigen',
+    '--config',
+    'ffigen.yaml',
+  ], workingDirectory: root.toFilePath());
+  if (res.exitCode != 0) {
+    log('[$PACKAGE_NAME] ffigen 警告: ${res.stderr}');
+  }
 }
 
-/// 辅助函数：映射 Android ABI
-String _mapAndroidAbi(Architecture arch) {
-  if (arch.name == 'arm') return 'armeabi-v7a';
-  if (arch.name == 'arm64') return 'arm64-v8a';
-  if (arch.name == 'ia32') return 'x86';
-  if (arch.name == 'x64') return 'x86_64';
-  if (arch.name == 'riscv64') return 'riscv64';
-  throw UnsupportedError('Unsupported Android architecture: ${arch.name}');
+/// --- 3. 下载地址构建 (请根据你的存储规则输入) ---
+String _getDownloadUrl(String tag, OS os, Architecture arch, bool isSimulator) {
+  final String baseUrl = "https://github.com/ggml-org/llama.cpp/releases/download/$tag";
+
+  String fileName;
+  switch (os) {
+    case OS.macOS:
+      fileName = "llama-$tag-bin-macos-${arch == Architecture.arm64 ? 'arm64' : 'x64'}.tar.gz";
+      break;
+    case OS.iOS:
+      // fileName = "";
+      // break;
+      throw UnsupportedError("[$PACKAGE_NAME] 尚未配置 $os 平台的下载地址");
+    case OS.android:
+      // fileName = "";
+      // break;
+      throw UnsupportedError("[$PACKAGE_NAME] 尚未配置 $os 平台的下载地址");
+    case OS.windows:
+      // fileName = "";
+      // break;
+      throw UnsupportedError("[$PACKAGE_NAME] 尚未配置 $os 平台的下载地址");
+    default:
+      throw UnsupportedError("[$PACKAGE_NAME] 尚未配置 $os 平台的下载地址");
+  }
+  return "$baseUrl/$fileName";
 }
 
-/// 辅助函数：在目录下递归查找文件
-File? _findLibrary(Directory dir, String fileName, OS os) {
-  // 直接检查 bin 目录（llama.cpp 默认输出位置）
-  final binDir = Directory(p.join(dir.path, 'bin'));
-  if (binDir.existsSync()) {
-    final directMatch = File(p.join(binDir.path, fileName));
-    if (directMatch.existsSync()) {
-      return directMatch;
+/// --- 4. 下载与解压核心 ---
+Future<void> _downloadAndProvision(
+  String url,
+  File target,
+  Directory tagDir,
+  OS os,
+  Architecture arch,
+  bool sim,
+) async {
+  if (!tagDir.existsSync()) tagDir.createSync(recursive: true);
+
+  final tmpFile = File('${tagDir.path}/download_tmp.archive');
+  final String platformName = "${os.name}-${arch.name}${sim ? '_sim' : ''}";
+  final Directory platformDir = Directory('${tagDir.path}/$platformName');
+
+  try {
+    log("正在下载至临时文件...");
+    final resp = await http.get(Uri.parse(url));
+    await tmpFile.writeAsBytes(resp.bodyBytes);
+
+    log("开始解压...");
+    final bytes = tmpFile.readAsBytesSync();
+    Archive archive;
+    if (url.endsWith('.zip')) {
+      archive = ZipDecoder().decodeBytes(bytes);
+    } else {
+      archive = TarDecoder().decodeBytes(GZipDecoder().decodeBytes(bytes));
     }
-  }
 
-  // 递归查找作为后备
-  for (var entity in dir.listSync(recursive: true)) {
-    if (entity is File && p.basename(entity.path) == fileName) {
-      return entity;
+    // 1. 先把所有内容解压到 tagDir 下
+    for (final file in archive) {
+      final String filename = file.name;
+      if (file.isFile) {
+        final data = file.content as List<int>;
+        File('${tagDir.path}/$filename')
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(data);
+      } else {
+        Directory('${tagDir.path}/$filename').createSync(recursive: true);
+      }
     }
-  }
 
-  return null;
+    // 2. 找到解压出来的那个原始文件夹（通常是列表里的第一个文件夹）
+    // 比如：llama-b8369-bin-macos-arm64/
+    final firstDir = tagDir.listSync().firstWhere((e) => e is Directory && !e.path.contains(platformName));
+
+    // 3. 重命名为我们要的名字（如 macos-arm64）
+    log("重命名文件夹: ${firstDir.path} -> ${platformDir.path}");
+    if (platformDir.existsSync()) platformDir.deleteSync(recursive: true);
+    await firstDir.rename(platformDir.path);
+
+    log("处理完成，文件夹位于: ${platformDir.path}");
+  } finally {
+    if (tmpFile.existsSync()) tmpFile.deleteSync();
+  }
+}
+
+
+/// --- 辅助工具 ---
+
+bool _isNativeLib(String name) => name.endsWith('.so') || name.endsWith('.dylib') || name.endsWith('.dll');
+
+String _getLibFileName(OS os, Architecture arch, bool sim) {
+  final ext = os == OS.windows ? 'dll' : (os == OS.macOS || os == OS.iOS ? 'dylib' : 'so');
+  final simTag = sim ? "_sim" : "";
+  return "${os.name}_${arch.name}$simTag.$ext";
+}
+
+bool _isSimulator(OS os, Architecture arch) {
+  if (os == OS.iOS) return arch == IOSSdk.iPhoneSimulator;
+  if (os == OS.android) return arch == Architecture.x64;
+  return false;
+}
+
+void _registerAsset(BuildOutputBuilder output, OS os, Architecture arch, bool sim, Directory tagDir) {
+  final String platformName = "${os.name}-${arch.name}${sim ? '_sim' : ''}";
+  // 假设 dylib 在重命名后的文件夹根目录下，或者在 bin 目录下
+  // 你需要确保这个路径能定位到那个 .dylib
+  final platformDir = Directory('${tagDir.path}/$platformName');
+
+  // 自动寻找文件夹下的第一个 dylib 进行挂载
+  final dylibFile = platformDir
+      .listSync(recursive: true)
+      .firstWhere((e) => e is File && _isNativeLib(e.path), orElse: () => throw "在 $platformName 文件夹中未找到 dylib");
+
+  log("挂载动态库: ${dylibFile.path}");
+
+  output.assets.code.add(
+    CodeAsset(package: PACKAGE_NAME, name: ASSET_ID, linkMode: DynamicLoadingBundled(), file: dylibFile.uri),
+  );
+}
+
+void log(String message) {
+  stdout.writeln('===> $message');
 }

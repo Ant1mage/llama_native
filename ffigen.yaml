@@ -1,61 +1,34 @@
 # Run with `dart run ffigen --config ffigen.yaml`.
 name: LlamaNativeBindings
-description: |
-  Bindings for llama.cpp library.
-  Regenerate bindings with `dart run ffigen --config ffigen.yaml`.
-
+description: Bindings for llama.cpp library.
 output: 'lib/llama_native_bindings.dart'
 
 ffi-native:
   asset-id: 'package:llama_native/llama_native'
 
-silence-enum-warning: true
-
 headers:
   entry-points:
     - 'src/llama.cpp/include/llama.h'
+    - 'src/llama.cpp/ggml/include/ggml.h'
+    - 'src/llama.cpp/gguf/include/ggml-backend.h'
+    - 'src/llama.cpp/tools/mtmd/mtmd.h'
+    - 'src/llama.cpp/tools/mtmd/mtmd-helper.h'
+    - 'src/llama_native_wrapper.h'
   include-directives:
     - 'src/llama.cpp/include/llama.h'
+    - 'src/llama.cpp/ggml/include/ggml.h'
+    - 'src/llama.cpp/ggml/include/ggml-backend.h'
+    - 'src/llama.cpp/tools/mtmd/mtmd.h'
+    - 'src/llama.cpp/tools/mtmd/mtmd-helper.h'
+    - 'src/llama_native_wrapper.h'
 
-comments:
-  style: any
-  length: full
-
-preamble: |
-  // ignore_for_file: always_specify_types, camel_case_types, non_constant_identifier_names, unused_field, unused_element
 
 compiler-opts:
   - "-x c"
   - "-Isrc/llama.cpp/include"
   - "-Isrc/llama.cpp/ggml/include"
-  - "-Isrc/llama.cpp"
+  - "-Isrc/llama.cpp/tools/mtmd"
   - "-I/opt/homebrew/opt/llvm/include"
+  - "-Wno-pragma-once-outside-header"
 
-structs:
-  include:
-    - 'llama_.*'
-    - 'ggml_.*'
-    - 'gguf_.*'
-  exclude:
-    - 'llama_cpp_global_context'
-
-functions:
-  include:
-    - 'llama_.*'
-    - 'ggml_.*'
-    - 'gguf_.*'
-  exclude:
-    - 'llama_cpp_global_context_init'
-    - 'llama_cpp_global_context_get'
-
-enums:
-  include:
-    - 'llama_.*'
-    - 'ggml_.*'
-    - 'gguf_.*'
-
-macros:
-  include:
-    - 'LLAMA_.*'
-    - 'GGML_.*'
-    - 'GGUF_.*'
+silence-enum-warning: true
