@@ -13,6 +13,7 @@ import 'package:llama_native/src/cache/kv_cache_manager.dart';
 import 'package:llama_native/src/logging/logger.dart';
 import 'package:llama_native/src/utils/disposable.dart';
 import 'package:llama_native/src/exceptions/llama_exceptions.dart';
+import 'package:llama_native/src/grammar/grammar.dart';
 
 /// 推理执行引擎
 class LlamaContext with Disposable {
@@ -130,17 +131,14 @@ class LlamaContext with Disposable {
   bool get isDisposed => _disposed;
 
   /// 流式生成（在独立 Isolate 中运行，避免阻塞主线程/GPU watchdog）
-  Stream<TokenGeneration> generateStream(List<int> inputTokens, {int maxTokens = 256}) async* {
+  Stream<TokenGeneration> generateStream(List<int> inputTokens, {int maxTokens = 256, Grammar? grammar}) async* {
     if (_disposed) throw StateError('Context is disposed');
     if (inputTokens.isEmpty) return;
 
-    // 用 ReceivePort 接收 Isolate 发回的每个 token
     final receivePort = ReceivePort();
     Isolate? isolate;
 
     try {
-      // 把所有 native 指针地址以整数形式传给 Isolate
-      // Dart Isolate 之间不能直接传 FFI 指针对象，但可以传地址整数
       final args = _IsolateArgs(
         sendPort: receivePort.sendPort,
         ctxAddress: _ctxPtr!.address,
@@ -148,9 +146,9 @@ class LlamaContext with Disposable {
         vocabAddress: _model.vocab.address,
         inputTokens: inputTokens,
         maxTokens: maxTokens,
+        grammarAddress: grammar?.sampler.address ?? 0,
       );
 
-      // 在独立 Isolate 中执行所有阻塞性 native 计算
       isolate = await Isolate.spawn(_inferenceIsolate, args);
 
       await for (final msg in receivePort) {
@@ -164,7 +162,6 @@ class LlamaContext with Disposable {
           _logger.error('Inference error: ${msg.message}');
           throw LlamaContextInitException(msg.message);
         } else if (msg == null) {
-          // Isolate 正常结束信号
           break;
         }
       }
@@ -188,16 +185,17 @@ class LlamaContext with Disposable {
     final sendPort = args.sendPort;
 
     try {
-      // 从地址恢复 native 指针（与主 Isolate 共享同一进程内存空间，地址有效）
       final ctx = Pointer<bindings.llama_context>.fromAddress(args.ctxAddress);
       final sampler = Pointer<bindings.llama_sampler>.fromAddress(args.samplerAddress);
       final vocab = Pointer<bindings.llama_vocab>.fromAddress(args.vocabAddress);
+      final grammarSampler = args.grammarAddress != 0
+          ? Pointer<bindings.llama_sampler>.fromAddress(args.grammarAddress)
+          : nullptr;
 
       int nPast = 0;
 
-      // 1. Prefill：处理整个 prompt（分小批次防止单次 GPU 任务过长）
       final tokens = args.inputTokens;
-      const prefillChunkSize = 64; // 每次最多 64 个 token，避免 Metal timeout
+      const prefillChunkSize = 64;
       var offset = 0;
       while (offset < tokens.length) {
         final end = (offset + prefillChunkSize).clamp(0, tokens.length);
@@ -207,11 +205,16 @@ class LlamaContext with Disposable {
         offset = end;
       }
 
-      // 2. Decode：逐 token 生成
       for (var i = 0; i < args.maxTokens; i++) {
         try {
-          final sampledToken = bindings.llama_sampler_sample(sampler, ctx, -1);
-          bindings.llama_sampler_accept(sampler, sampledToken);
+          int sampledToken;
+          if (grammarSampler != nullptr) {
+            sampledToken = bindings.llama_sampler_sample(grammarSampler, ctx, -1);
+            bindings.llama_sampler_accept(grammarSampler, sampledToken);
+          } else {
+            sampledToken = bindings.llama_sampler_sample(sampler, ctx, -1);
+            bindings.llama_sampler_accept(sampler, sampledToken);
+          }
 
           final isEnd = bindings.llama_token_is_eog(vocab, sampledToken);
           nPast += 1;
@@ -220,7 +223,6 @@ class LlamaContext with Disposable {
 
           if (isEnd) break;
 
-          // 将生成的 token 送回继续解码
           _decodeChunk(ctx, [sampledToken], nPast - 1, sendPort);
         } catch (e) {
           sendPort.send(_ErrorMsg('Error during token generation: ${e.toString()}'));
@@ -228,7 +230,6 @@ class LlamaContext with Disposable {
         }
       }
 
-      // 发送结束信号
       sendPort.send(null);
     } catch (e) {
       sendPort.send(_ErrorMsg('Inference isolate error: ${e.toString()}'));
@@ -263,7 +264,7 @@ class LlamaContext with Disposable {
 
     final nTokens = tokens.length;
     _logger.debug('Processing $nTokens tokens');
-    
+
     final tokenArray = calloc<Int32>(nTokens);
     try {
       for (var i = 0; i < nTokens; i++) {
@@ -272,7 +273,7 @@ class LlamaContext with Disposable {
 
       final batch = bindings.llama_batch_get_one(tokenArray, nTokens);
       _logger.debug('Created batch with $nTokens tokens');
-      
+
       final ret = bindings.llama_decode(handle, batch);
       if (ret < 0) {
         _logger.error('llama_decode failed with code $ret');
@@ -347,6 +348,7 @@ class _IsolateArgs {
   final int vocabAddress;
   final List<int> inputTokens;
   final int maxTokens;
+  final int grammarAddress;
 
   const _IsolateArgs({
     required this.sendPort,
@@ -355,6 +357,7 @@ class _IsolateArgs {
     required this.vocabAddress,
     required this.inputTokens,
     required this.maxTokens,
+    required this.grammarAddress,
   });
 }
 

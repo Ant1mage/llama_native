@@ -9,6 +9,7 @@ jobs:
   build-apple:
     name: Build for Apple Platforms
     runs-on: macos-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
@@ -26,12 +27,12 @@ jobs:
           cmake .. \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
             -DBUILD_SHARED_LIBS=ON \
-            -DGGML_METAL=ON \
+            -DGGML_METAL=OFF \
             -DGGML_NATIVE=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TOOLS=OFF
 
-          cmake --build . --config Release --parallel
+          cmake --build . --config Release --parallel 4
 
       - name: Verify macOS Build Output
         run: |
@@ -52,9 +53,9 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
             -DBUILD_SHARED_LIBS=ON \
-            -DGGML_METAL=ON \
+            -DGGML_METAL=OFF \
             -DGGML_NATIVE=OFF
-          cmake --build . --config Release --target llama --parallel
+          cmake --build . --config Release --target llama --parallel 4
           cd ..
 
           # iOS Simulator (arm64 + x86_64)
@@ -65,8 +66,9 @@ jobs:
             -DCMAKE_OSX_SYSROOT=iphonesimulator \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
             -DBUILD_SHARED_LIBS=ON \
+            -DGGML_METAL=OFF \
             -DGGML_NATIVE=OFF
-          cmake --build . --config Release --target llama --parallel
+          cmake --build . --config Release --target llama --parallel 4
 
       - name: Package Artifacts
         run: |
@@ -119,6 +121,7 @@ jobs:
   build-android:
     name: Build for Android
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
@@ -185,6 +188,7 @@ jobs:
   build-linux:
     name: Build for Linux
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
@@ -230,6 +234,7 @@ jobs:
   build-windows:
     name: Build for Windows
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout llama.cpp
         uses: actions/checkout@v4

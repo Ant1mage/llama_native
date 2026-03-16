@@ -38,5 +38,15 @@ export 'package:llama_native/src/tokenizer/chat_tokenizer.dart'
 // Session
 export 'package:llama_native/src/session/session_state.dart' show SessionState, SessionManager;
 
+// Grammar
+export 'package:llama_native/src/grammar/grammar.dart'
+    show Grammar, GrammarConfig, GrammarParseResult, JsonSchemaBuilder;
+
+// Function Calling
+export 'package:llama_native/src/function/function_definition.dart'
+    show FunctionDefinition, FunctionParameter, FunctionCallResult, FunctionCallParser;
+export 'package:llama_native/src/function/function_manager.dart'
+    show FunctionManager, FunctionCallingHelper;
+
 // Logging
 export 'package:llama_native/src/logging/logger.dart' show Logger;
