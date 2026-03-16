@@ -53,3 +53,4 @@ migrate_working_dir/
 # Build artifacts
 **/.cxx/
 **/cmake_build/
+.binaries/

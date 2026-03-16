@@ -207,7 +207,7 @@ Future<void> runFfigen(String packageRoot) async {
 
 /// 获取二进制文件存储目录 .binary/{tag}/
 Directory getBinaryDirectory(String packageRoot, String tagName) {
-  return Directory(p.join(packageRoot, '.binary', tagName));
+  return Directory(p.join(packageRoot, '.binaries', tagName));
 }
 
 /// 获取下载 URL
