@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:code_assets/code_assets.dart';
+import 'package:data_assets/data_assets.dart';
 import 'package:hooks/hooks.dart';
 import 'package:path/path.dart' as p;
 
@@ -39,13 +40,32 @@ void main(List<String> args) async {
 
     final platformConfig = PlatformConfig(os: targetOS, arch: targetArch, isSimulator: isSimulator);
 
-    final libFile = await processPlatform(platformConfig, packageRoot, llamaCppVersion);
+    final libFiles = await processPlatform(platformConfig, packageRoot, llamaCppVersion);
+
+    final mainLibName = _getMainLibraryName(targetOS);
+    File? mainLib;
+    for (final lib in libFiles) {
+      if (p.basename(lib.path) == mainLibName) {
+        mainLib = lib;
+        break;
+      }
+    }
+
+    if (mainLib == null) {
+      throw Exception('❌ 未找到主库文件：$mainLibName');
+    }
 
     output.assets.code.add(
-      CodeAsset(package: 'llama_native', name: 'llama_native', linkMode: DynamicLoadingBundled(), file: libFile.uri),
+      CodeAsset(package: 'llama_native', name: 'llama_native', linkMode: DynamicLoadingBundled(), file: mainLib.uri),
     );
 
-    print('\n✅ ========== 构建完成：${libFile.path} ==========');
+    for (final lib in libFiles) {
+      if (p.basename(lib.path) != mainLibName) {
+        output.assets.data.add(DataAsset(package: 'llama_native', name: p.basename(lib.path), file: lib.uri));
+      }
+    }
+
+    print('\n✅ ========== 构建完成：${libFiles.length} 个库文件 ==========');
   });
 }
 
@@ -246,49 +266,53 @@ Future<void> extractArchive(File archiveFile, String extractPath) async {
   print('✅ 解压完成：$extractPath');
 }
 
-Future<File?> findMainLibrary(String extractPath, String targetOS) async {
+List<String> _getLibExtensions(String os) {
+  if (os == 'macos' || os == 'ios') return ['.dylib'];
+  if (os == 'android' || os == 'linux') return ['.so'];
+  if (os == 'windows') return ['.dll'];
+  throw UnsupportedError('Unsupported OS: $os');
+}
+
+Future<List<File>> findAllLibraries(String extractPath, String targetOS) async {
   final extractDir = Directory(extractPath);
 
   if (!await extractDir.exists()) {
-    return null;
+    return [];
   }
 
   final files = extractDir.listSync(recursive: true);
-  final libExtensions = ['.dylib', '.so', '.dll'];
+  final libExtensions = _getLibExtensions(targetOS);
+  final libraries = <File>[];
 
   for (final entity in files) {
     if (entity is File) {
-      final basename = p.basename(entity.path);
       final ext = p.extension(entity.path);
-
       if (libExtensions.contains(ext)) {
-        if (basename == 'libllama.dylib' || basename == 'libllama.so' || basename == 'llama.dll') {
-          return entity;
-        }
+        libraries.add(entity);
       }
     }
   }
 
-  return null;
+  return libraries;
 }
 
-String _getLibraryName(String os) {
+String _getMainLibraryName(String os) {
   if (os == 'android' || os == 'linux') return 'libllama.so';
   if (os == 'ios' || os == 'macos') return 'libllama.dylib';
   if (os == 'windows') return 'llama.dll';
   throw UnsupportedError('Unsupported OS: $os');
 }
 
-Future<File> processPlatform(PlatformConfig config, String packageRoot, String tagName) async {
+Future<List<File>> processPlatform(PlatformConfig config, String packageRoot, String tagName) async {
   print('\n========== 处理平台：${config.os}-${config.arch}${config.isSimulator ? '-simulator' : ''} ==========');
 
   final platformDirName = '${config.os}_${config.arch}${config.isSimulator ? '_simulator' : ''}';
   final platformDir = Directory(p.join(packageRoot, '.binaries', tagName, platformDirName));
 
-  final cachedLib = await _checkCachedLibrary(platformDir.path, config.os);
-  if (cachedLib != null) {
-    print('✅ 使用缓存的库文件：${cachedLib.path}');
-    return cachedLib;
+  final cachedLibs = await _checkCachedLibraries(platformDir.path, config.os);
+  if (cachedLibs.isNotEmpty) {
+    print('✅ 使用缓存的库文件：${cachedLibs.length} 个');
+    return cachedLibs;
   }
 
   final downloadUrl = getDownloadUrl(config, tagName);
@@ -302,35 +326,38 @@ Future<File> processPlatform(PlatformConfig config, String packageRoot, String t
 
     await extractArchive(archiveFile, platformDir.path);
 
-    final libFile = await findMainLibrary(platformDir.path, config.os);
+    final libFiles = await findAllLibraries(platformDir.path, config.os);
 
-    if (libFile == null) {
+    if (libFiles.isEmpty) {
       throw Exception('❌ 未找到库文件');
     }
 
     await archiveFile.delete();
 
     print('✅ 平台 ${config.os}-${config.arch} 处理完成');
-    print('📂 库文件位置：${libFile.path}');
-    return libFile;
+    print('📂 库文件数量：${libFiles.length}');
+    for (final lib in libFiles) {
+      print('   - ${p.basename(lib.path)}');
+    }
+    return libFiles;
   } catch (e) {
     print('❌ 处理平台 ${config.os}-${config.arch} 失败：$e');
     rethrow;
   }
 }
 
-Future<File?> _checkCachedLibrary(String platformDir, String targetOS) async {
+Future<List<File>> _checkCachedLibraries(String platformDir, String targetOS) async {
   final dir = Directory(platformDir);
 
   if (!await dir.exists()) {
-    return null;
+    return [];
   }
 
-  final libName = _getLibraryName(targetOS);
-  final libPath = p.join(platformDir, libName);
-  if (await File(libPath).exists()) {
-    return File(libPath);
+  final mainLibName = _getMainLibraryName(targetOS);
+  final mainLibPath = p.join(platformDir, mainLibName);
+  if (!await File(mainLibPath).exists()) {
+    return [];
   }
 
-  return null;
+  return await findAllLibraries(platformDir, targetOS);
 }
