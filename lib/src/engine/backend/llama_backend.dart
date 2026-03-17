@@ -83,9 +83,6 @@ class LlamaBackend {
     _logger.info('Config: gpu_layers=${_config.gpuLayers}, mmap=${_config.useMmap}');
 
     try {
-      final hwAccel = detectHardwareAcceleration();
-      _logger.info('Detected hardware acceleration: ${hwAccel.name}');
-
       if (_config.numaStrategy != bindings.ggml_numa_strategy.GGML_NUMA_STRATEGY_DISABLED) {
         try {
           bindings.llama_numa_init(_config.numaStrategy);

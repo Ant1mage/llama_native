@@ -67,7 +67,7 @@ class PlatformInfo {
     } catch (_) {}
 
     if (Platform.isMacOS) return isAppleSilicon ? 16 * 1024 : 8 * 1024;
-    if (Platform.isIOS) return 4 * 1024;
+    if (Platform.isIOS) return 6 * 1024;
     if (Platform.isAndroid) return 6 * 1024;
     if (Platform.isWindows || Platform.isLinux) return 16 * 1024;
     return 8 * 1024;
@@ -119,23 +119,37 @@ class PlatformInfo {
   }
 
   static int recommendedGpuLayers({int? modelSizeMB, int? modelLayers}) {
-    if (!supportsGpuOffload) return 0;
+    final hwAccel = detectHardwareAcceleration();
 
-    final vram = availableVRAMMB;
+    if (hwAccel == HardwareAcceleration.cpu) return 0;
+
     final mem = availableMemoryMB;
+    final vram = availableVRAMMB;
 
-    int estimatedModelSize = modelSizeMB ?? 0;
-    if (estimatedModelSize == 0) {
-      estimatedModelSize = (mem * 0.3).toInt();
+    double coeff;
+    switch (hwAccel) {
+      case HardwareAcceleration.metal:
+        coeff = 0.6;
+        break;
+      case HardwareAcceleration.vulkan:
+        coeff = 0.6;
+        break;
+      case HardwareAcceleration.cuda:
+        coeff = 0.85;
+        break;
+      case HardwareAcceleration.cpu:
+        return 0;
     }
 
-    int usableVram = vram - estimatedModelSize;
+    int estimatedModelSize = modelSizeMB ?? (mem * 0.3).toInt();
+    final kvCacheMB = (recommendedContextLength() * 0.5).toInt();
+    int usableVram = ((vram * coeff - kvCacheMB)).toInt();
     if (usableVram < 512) return 0;
 
-    if (modelLayers != null) {
-      final vramPerLayer = (estimatedModelSize * 1.5) / modelLayers;
-      final maxLayers = (usableVram / vramPerLayer).floor();
-      return maxLayers.clamp(0, modelLayers);
+    if (modelLayers != null && modelLayers > 0) {
+      final memoryPerLayer = estimatedModelSize / modelLayers;
+      final layers = (usableVram / memoryPerLayer).floor();
+      return layers.clamp(0, modelLayers);
     }
 
     if (Platform.isMacOS && isAppleSilicon) {
@@ -166,59 +180,26 @@ class PlatformInfo {
   static int recommendedContextLength({int? modelSizeMB}) {
     final mem = availableMemoryMB;
 
-    int estimatedModelSize = modelSizeMB ?? 0;
-    if (estimatedModelSize == 0) {
-      estimatedModelSize = (mem * 0.3).toInt();
-    }
+    const int bytesPerToken = 2;
+    final int rawContext = (bytesPerToken * mem * 0.2).toInt();
 
-    int usableMem = mem - estimatedModelSize;
-    if (usableMem < 512) return 512;
-
-    if (Platform.isIOS || Platform.isAndroid) {
-      if (usableMem >= 4 * 1024) return 4096;
-      if (usableMem >= 2 * 1024) return 2048;
-      return 1024;
-    }
-
-    if (Platform.isMacOS && isAppleSilicon) {
-      if (usableMem >= 12 * 1024) return 8192;
-      if (usableMem >= 8 * 1024) return 4096;
-      if (usableMem >= 4 * 1024) return 2048;
-      return 1024;
-    }
-
-    if (usableMem >= 16 * 1024) return 16384;
-    if (usableMem >= 12 * 1024) return 8192;
-    if (usableMem >= 8 * 1024) return 4096;
-    if (usableMem >= 4 * 1024) return 2048;
-    return 1024;
-  }
-
-  static int recommendedBatchSize({bool useGpu = true}) {
-    if (useGpu && supportsGpuOffload) {
-      if (Platform.isMacOS && isAppleSilicon) {
-        return 512;
-      }
-      if (Platform.isIOS) return 64;
-      if (availableVRAMMB >= 8 * 1024) return 512;
-      if (availableVRAMMB >= 4 * 1024) return 256;
-      return 128;
-    }
-
-    if (Platform.numberOfProcessors >= 8) return 512;
-    if (Platform.numberOfProcessors >= 4) return 256;
-    return 128;
+    return rawContext.clamp(1024, 8192);
   }
 
   static int recommendedThreads() {
     final cores = Platform.numberOfProcessors;
-    if (cores <= 2) return cores;
-    if (cores <= 4) return cores - 1;
-    return (cores * 0.75).ceil().clamp(2, 16);
+    return (cores - 2).clamp(1, 6);
+  }
+
+  static int recommendedBatchSize({bool useGpu = true}) {
+    final mem = systemMemoryMB;
+
+    if (mem > 8 * 1024) return 512;
+    return 256;
   }
 
   static int recommendedUBatchSize() {
-    return 128;
+    return recommendedBatchSize().clamp(64, 128);
   }
 
   static HardwareAcceleration detectHardwareAcceleration() {

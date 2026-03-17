@@ -8,3 +8,4 @@ export 'package:llama_native/llama_engine.dart' show LlamaEngine, LoadState, Loa
 export 'package:llama_native/llama_chat.dart' show LlamaChat, LlamaChatMessage, LlamaMessageRole;
 export 'package:llama_native/src/engine/context/token_generation.dart' show TokenGeneration;
 export 'package:llama_native/src/engine/exceptions/llama_exceptions.dart' show LlamaException, LlamaErrorType;
+export 'package:llama_native/src/utils/platform_info.dart' show PlatformInfo;
