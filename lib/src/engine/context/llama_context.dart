@@ -25,6 +25,13 @@ class LlamaContext with Disposable {
   KVCacheManager? _kvCache;
   bool _disposed = false;
   int _nPast = 0;
+  List<int> _keepPrefixTokens = [];
+  final List<int> _recentTokens = [];
+  static const int _maxRecentTokens = 1024;
+
+  String _conversationSummary = '';
+  String Function(String conversationText)? _summarizeCallback;
+  static const String _defaultSummaryPrompt = '请用简洁的语言总结以下对话内容，保留关键信息，不超过200字：\n\n';
 
   LlamaContext._(this._model, this._config) : _logger = Logger('LlamaContext');
 
@@ -32,6 +39,16 @@ class LlamaContext with Disposable {
     final context = LlamaContext._(model, config);
     context._initialize();
     return context;
+  }
+
+  void setSummarizeCallback(String Function(String conversationText)? callback) {
+    _summarizeCallback = callback;
+  }
+
+  String get conversationSummary => _conversationSummary;
+
+  void setConversationSummary(String summary) {
+    _conversationSummary = summary;
   }
 
   void _initialize() {
@@ -140,22 +157,39 @@ class LlamaContext with Disposable {
     final batchSize = _config.nBatch;
 
     if (nTokens <= batchSize) {
-      _decodeBatch(tokens);
+      _decodeBatch(tokens, checkOverflow: true);
     } else {
       for (var offset = 0; offset < nTokens; offset += batchSize) {
         final end = (offset + batchSize < nTokens) ? offset + batchSize : nTokens;
         final batch = tokens.sublist(offset, end);
-        _decodeBatch(batch);
+        _decodeBatch(batch, checkOverflow: true);
       }
     }
   }
 
-  void _decodeBatch(List<int> tokens) {
+  void _decodeBatchRebuild(List<int> tokens) {
+    if (tokens.isEmpty) return;
+
+    final nTokens = tokens.length;
+    final batchSize = _config.nBatch;
+
+    if (nTokens <= batchSize) {
+      _decodeBatch(tokens, checkOverflow: false);
+    } else {
+      for (var offset = 0; offset < nTokens; offset += batchSize) {
+        final end = (offset + batchSize < nTokens) ? offset + batchSize : nTokens;
+        final batch = tokens.sublist(offset, end);
+        _decodeBatch(batch, checkOverflow: false);
+      }
+    }
+  }
+
+  void _decodeBatch(List<int> tokens, {bool checkOverflow = true}) {
     if (tokens.isEmpty) return;
 
     final nTokens = tokens.length;
 
-    if (_nPast + nTokens > _config.nCtx) {
+    if (checkOverflow && _nPast + nTokens > _config.nCtx) {
       _logger.warning('KV cache would overflow: _nPast=$_nPast + nTokens=$nTokens > nCtx=${_config.nCtx}');
       _autoTruncateCache(nTokens);
     }
@@ -180,6 +214,12 @@ class LlamaContext with Disposable {
         throw LlamaException.kvCache('KV cache full, cannot decode batch');
       }
 
+      _recentTokens.addAll(tokens);
+      if (_recentTokens.length > _maxRecentTokens) {
+        final removeCount = _recentTokens.length - _maxRecentTokens;
+        _recentTokens.removeRange(0, removeCount);
+      }
+
       _nPast += nTokens;
       _kvCache?.addProcessed(nTokens);
     } finally {
@@ -187,29 +227,100 @@ class LlamaContext with Disposable {
     }
   }
 
-  void _autoTruncateCache(int neededTokens) {
-    final targetLength = _config.nCtx - neededTokens - (_config.nCtx ~/ 8);
-    if (targetLength <= 0) {
-      throw LlamaException.kvCache('Context too small for $neededTokens tokens');
+  String? _pendingSummarizationText;
+  int _pendingNeededTokens = 0;
+
+  bool get needsSummarization => _pendingSummarizationText != null;
+
+  String? getSummarizationRequest() {
+    final text = _pendingSummarizationText;
+    _pendingSummarizationText = null;
+    return text;
+  }
+
+  void applySummaryAndRebuild(String summary) {
+    if (summary.isEmpty) {
+      _logger.warning('Empty summary provided, using fallback');
+      _fallbackRebuild(_pendingNeededTokens);
+      return;
     }
 
-    _logger.info('Auto-truncating KV cache from $_nPast to $targetLength tokens');
+    _conversationSummary = summary;
+    _logger.info('Applying summary: ${summary.length} chars');
 
     final mem = bindings.llama_get_memory(_ctxPtr!);
-    final removeCount = _nPast - targetLength;
+    bindings.llama_memory_clear(mem, true);
+    bindings.llama_synchronize(_ctxPtr!);
+    _nPast = 0;
 
-    if (removeCount > 0) {
-      final removed = bindings.llama_memory_seq_rm(mem, 0, 0, removeCount);
-      if (removed) {
-        bindings.llama_memory_seq_add(mem, 0, removeCount, _nPast, -removeCount);
-        _nPast -= removeCount;
-        _logger.info('Truncated $removeCount tokens, nPast now: $_nPast');
-      } else {
-        _logger.warning('Failed to truncate, resetting cache');
-        bindings.llama_memory_clear(mem, true);
-        _nPast = 0;
-      }
+    final tokensToRestore = <int>[];
+
+    if (_keepPrefixTokens.isNotEmpty) {
+      tokensToRestore.addAll(_keepPrefixTokens);
     }
+
+    if (_conversationSummary.isNotEmpty) {
+      final summaryPrompt = '对话历史摘要：$_conversationSummary\n\n';
+      final summaryTokens = _model.tokenize(summaryPrompt, addBos: false);
+      tokensToRestore.addAll(summaryTokens);
+      _logger.info('Added summary tokens: ${summaryTokens.length}');
+    }
+
+    final availableSpace = _config.nCtx - tokensToRestore.length - _pendingNeededTokens - (_config.nCtx ~/ 8);
+    if (availableSpace > 0 && _recentTokens.isNotEmpty) {
+      final recentCount = availableSpace < _recentTokens.length ? availableSpace : _recentTokens.length;
+      final recentStart = _recentTokens.length - recentCount;
+      tokensToRestore.addAll(_recentTokens.sublist(recentStart));
+      _logger.info('Added recent tokens: $recentCount');
+    }
+
+    if (tokensToRestore.isNotEmpty) {
+      _logger.info('Re-decoding ${tokensToRestore.length} tokens with summary');
+      _decodeBatchRebuild(tokensToRestore);
+    }
+
+    _pendingNeededTokens = 0;
+  }
+
+  void _fallbackRebuild(int neededTokens) {
+    final mem = bindings.llama_get_memory(_ctxPtr!);
+    bindings.llama_memory_clear(mem, true);
+    bindings.llama_synchronize(_ctxPtr!);
+    _nPast = 0;
+
+    final tokensToRestore = <int>[];
+
+    if (_keepPrefixTokens.isNotEmpty) {
+      tokensToRestore.addAll(_keepPrefixTokens);
+      _logger.info('Will restore ${_keepPrefixTokens.length} keep prefix tokens');
+    }
+
+    final availableSpace = _config.nCtx - tokensToRestore.length - neededTokens - (_config.nCtx ~/ 8);
+    if (availableSpace > 0 && _recentTokens.isNotEmpty) {
+      final recentCount = availableSpace < _recentTokens.length ? availableSpace : _recentTokens.length;
+      final recentStart = _recentTokens.length - recentCount;
+      tokensToRestore.addAll(_recentTokens.sublist(recentStart));
+      _logger.info('Will restore $recentCount recent tokens');
+    }
+
+    if (tokensToRestore.isNotEmpty) {
+      _logger.info('Re-decoding ${tokensToRestore.length} tokens after cache clear');
+      _decodeBatchRebuild(tokensToRestore);
+    }
+  }
+
+  void _autoTruncateCache(int neededTokens) {
+    _logger.warning('Context full, preparing for cache rebuild');
+
+    if (_summarizeCallback != null && _recentTokens.isNotEmpty) {
+      final conversationText = _model.detokenize(_recentTokens);
+      _pendingSummarizationText = conversationText;
+      _pendingNeededTokens = neededTokens;
+      _logger.info('Requesting summarization for ${conversationText.length} chars');
+      return;
+    }
+
+    _fallbackRebuild(neededTokens);
   }
 
   int sample({Pointer<bindings.llama_sampler>? grammarSampler}) {
@@ -324,9 +435,16 @@ class LlamaContext with Disposable {
     }
   }
 
+  void setKeepPrefixTokens(List<int> tokens) {
+    _keepPrefixTokens = List.from(tokens);
+    _kvCache?.setKeepPrefix(tokens.length);
+    _logger.info('Set keep prefix to ${tokens.length} tokens');
+  }
+
   void reset() {
     _logger.debug('Resetting context, current nPast: $_nPast');
     _nPast = 0;
+    _recentTokens.clear();
     _kvCache?.reset();
     if (_samplerChain != null) {
       bindings.llama_sampler_reset(_samplerChain!);
@@ -338,6 +456,15 @@ class LlamaContext with Disposable {
   int get remainingContext => _config.nCtx - _nPast;
 
   bool get needsTruncation => remainingContext < _config.nBatch;
+
+  int get keepPrefix => _kvCache?.keepPrefix ?? 0;
+
+  Pointer<bindings.llama_context> get ctxPtr {
+    if (_ctxPtr == null || _disposed) {
+      throw StateError('Context is disposed');
+    }
+    return _ctxPtr!;
+  }
 
   @override
   void dispose() {

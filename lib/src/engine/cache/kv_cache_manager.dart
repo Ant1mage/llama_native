@@ -110,6 +110,7 @@ class KVCacheManager with Disposable {
       try {
         final mem = bindings.llama_get_memory(_ctx!);
         bindings.llama_memory_clear(mem, true);
+        bindings.llama_synchronize(_ctx!);
         _logger.debug('KV Cache reset');
       } catch (e) {
         _logger.error('Error during cache reset: $e');

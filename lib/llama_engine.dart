@@ -109,6 +109,25 @@ class LlamaEngine {
     }
   }
 
+  Future<void> setKeepPrefixTokens(List<int> tokens) async {
+    if (_isolate != null && _isolate!.isModelLoaded) {
+      await _isolate!.setKeepPrefixTokens(tokens);
+    }
+  }
+
+  Future<Map<String, dynamic>> checkNeedsSummarization() async {
+    if (_isolate == null || !_isolate!.isModelLoaded) {
+      return {'needsSummarization': false, 'text': null};
+    }
+    return _isolate!.checkNeedsSummarization();
+  }
+
+  Future<void> applySummary(String summary) async {
+    if (_isolate != null && _isolate!.isModelLoaded) {
+      await _isolate!.applySummary(summary);
+    }
+  }
+
   Future<void> dispose() async {
     await _isolate?.dispose();
     _isolate = null;

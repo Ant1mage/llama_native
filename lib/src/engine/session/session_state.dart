@@ -51,8 +51,7 @@ class SessionState implements Disposable {
 
     _logger.info('Capturing session state from context');
 
-    // 捕获 KV Cache 快照
-    _cacheSnapshot = KVCacheSnapshot.fromContext(context.kvCache);
+    _cacheSnapshot = KVCacheSnapshot.fromContext(context.ctxPtr, keepPrefix: context.keepPrefix);
 
     _logger.info('Session captured: ${context.nPast} tokens');
   }
@@ -67,10 +66,13 @@ class SessionState implements Disposable {
 
     _logger.info('Restoring session state to context');
 
-    // 恢复 KV Cache
-    _cacheSnapshot!.restoreTo(context.kvCache);
-
-    _logger.info('Session restored: ${context.nPast} tokens');
+    final success = _cacheSnapshot!.restoreTo(context.ctxPtr);
+    if (success) {
+      _cacheSnapshot!.restoreToManager(context.kvCache);
+      _logger.info('Session restored: ${context.nPast} tokens');
+    } else {
+      _logger.warning('Failed to restore session state');
+    }
   }
 
   /// 序列化为字节
@@ -79,16 +81,14 @@ class SessionState implements Disposable {
 
     _logger.debug('Serializing session state');
 
-    // 构建数据结构
     final data = <String, dynamic>{
       'session_id': sessionId,
       'created_at': createdAt.toIso8601String(),
       'n_past': _cacheSnapshot?.nPast ?? 0,
       'keep_prefix': _cacheSnapshot?.keepPrefix ?? 0,
-      'data': base64Encode(_cacheSnapshot?.data ?? []),
+      'state_data': _cacheSnapshot?.stateData != null ? base64Encode(_cacheSnapshot!.stateData!) : '',
     };
 
-    // 转换为 JSON 并编码
     final jsonStr = jsonEncode(data);
     _serializedData = Uint8List.fromList(jsonStr.codeUnits);
 
@@ -99,22 +99,25 @@ class SessionState implements Disposable {
   /// 从字节反序列化
   static Future<SessionState> deserialize(Uint8List data) async {
     try {
-      // 解析 JSON
       final jsonStr = String.fromCharCodes(data);
       final parsed = jsonDecode(jsonStr) as Map<String, dynamic>;
 
-      // 创建会话状态
       final session = SessionState(
         sessionId: parsed['session_id'] as String,
         createdAt: DateTime.parse(parsed['created_at'] as String),
       );
 
-      // 恢复 KV Cache 快照
       final nPast = parsed['n_past'] as int;
       final keepPrefix = parsed['keep_prefix'] as int;
-      final cacheData = base64Decode(parsed['data'] as String);
+      final stateDataStr = parsed['state_data'] as String?;
+      final stateData = stateDataStr != null && stateDataStr.isNotEmpty ? base64Decode(stateDataStr) : null;
 
-      session._cacheSnapshot = KVCacheSnapshot(nPast: nPast, keepPrefix: keepPrefix, windowSize: null, data: cacheData);
+      session._cacheSnapshot = KVCacheSnapshot(
+        nPast: nPast,
+        keepPrefix: keepPrefix,
+        windowSize: null,
+        stateData: stateData,
+      );
 
       session._serializedData = data;
       return session;

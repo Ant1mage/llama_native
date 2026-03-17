@@ -39,6 +39,8 @@ class _ChatPageState extends State<ChatPage> {
   LlamaChat? _chat;
 
   String _statusText = '请选择模型文件开始';
+  String? _modelPath;
+  bool _isSummarizing = false;
 
   @override
   void initState() {
@@ -59,7 +61,11 @@ class _ChatPageState extends State<ChatPage> {
             setState(() {
               _statusText = deviceInfo();
             });
-            _chat = LlamaChat(engine: _engine, systemPrompt: "你叫Lumen, 是一个专业的智能助手, 每次回答不得超于4096字, **去掉思考过程**, 请严格按照这个指示");
+            _chat = LlamaChat(
+              engine: _engine,
+              systemPrompt: "你叫Lumen, 是一个专业的智能助手, 每次回答不得超于4096字, **去掉思考过程**, 请严格按照这个指示",
+              summarizeCallback: _generateSummary,
+            );
             break;
           case LoadState.error:
             _statusText = '错误: ${_engine.error}';
@@ -91,6 +97,59 @@ class _ChatPageState extends State<ChatPage> {
         }
       });
     });
+  }
+
+  Future<String> _generateSummary(String conversationText) async {
+    if (_modelPath == null) return '';
+
+    setState(() {
+      _isSummarizing = true;
+      _statusText = '正在生成对话摘要...';
+    });
+
+    try {
+      final summaryEngine = LlamaEngine();
+      await summaryEngine.load(_modelPath!);
+
+      if (!summaryEngine.isReady) {
+        summaryEngine.dispose();
+        return '';
+      }
+
+      final summaryPrompt = '''请用简洁的语言总结以下对话内容，保留关键信息，不超过200字。只输出摘要内容，不要输出其他内容。
+
+对话内容：
+$conversationText
+
+摘要：''';
+
+      final tokens = await summaryEngine.tokenize(summaryPrompt, addBos: false);
+
+      final buffer = StringBuffer();
+      await for (final generation in summaryEngine.generate(tokens, maxTokens: 256)) {
+        buffer.write(generation.text);
+        if (generation.isEnd) break;
+      }
+
+      await summaryEngine.dispose();
+
+      final summary = buffer.toString().trim();
+      debugPrint('生成摘要: $summary');
+
+      setState(() {
+        _statusText = deviceInfo();
+        _isSummarizing = false;
+      });
+
+      return summary;
+    } catch (e) {
+      debugPrint('生成摘要失败: $e');
+      setState(() {
+        _statusText = deviceInfo();
+        _isSummarizing = false;
+      });
+      return '';
+    }
   }
 
   @override
@@ -143,6 +202,7 @@ class _ChatPageState extends State<ChatPage> {
           destinationPath = result.files.single.path!;
         }
 
+        _modelPath = destinationPath;
         await _engine.load(destinationPath);
       }
     } catch (e) {
@@ -154,7 +214,7 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _sendMessage() async {
     final text = _controller.text.trim();
-    if (text.isEmpty || !_engine.isReady) return;
+    if (text.isEmpty || !_engine.isReady || _isSummarizing) return;
 
     _controller.clear();
 
@@ -255,6 +315,20 @@ class _ChatPageState extends State<ChatPage> {
             color: Theme.of(context).colorScheme.surfaceContainerHighest,
             child: Text(_statusText, style: Theme.of(context).textTheme.bodySmall, textAlign: TextAlign.center),
           ),
+          if (_chat?.conversationSummary.isNotEmpty == true)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(8),
+              color: Theme.of(context).colorScheme.primaryContainer,
+              child: Text(
+                '📝 对话摘要: ${_chat!.conversationSummary}',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           Expanded(
             child: _messages.isEmpty
                 ? Center(
@@ -304,18 +378,24 @@ class _ChatPageState extends State<ChatPage> {
                       maxLines: null,
                       textInputAction: TextInputAction.send,
                       onSubmitted: (_) => _sendMessage(),
-                      enabled: _engine.isReady && !_isGenerating,
+                      enabled: _engine.isReady && !_isGenerating && !_isSummarizing,
                     ),
                   ),
                   const SizedBox(width: 8),
-                  if (_isGenerating)
+                  if (_isGenerating || _isSummarizing)
                     IconButton.filled(
-                      icon: const Icon(Icons.stop),
+                      icon: _isSummarizing
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.stop),
                       style: IconButton.styleFrom(
                         backgroundColor: Theme.of(context).colorScheme.error,
                         foregroundColor: Theme.of(context).colorScheme.onError,
                       ),
-                      onPressed: _stopGeneration,
+                      onPressed: _isSummarizing ? null : _stopGeneration,
                     )
                   else
                     IconButton.filled(icon: const Icon(Icons.send), onPressed: _engine.isReady ? _sendMessage : null),

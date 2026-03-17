@@ -10,6 +10,8 @@ Flutter FFI 插件，提供 llama.cpp 的全平台 Dart 封装，支持本地大
 - ⚡ **流式生成**: 实时 token 输出，不阻塞 UI
 - 🎯 **TokenGeneration**: 结构化生成结果，包含 token ID、文本、结束状态
 - 🔧 **统一异常**: LlamaException + LlamaErrorType 枚举
+- 🧠 **智能上下文压缩**: Context 溢出时自动生成摘要，保留关键对话信息
+- 🔄 **KV Cache 重建**: 支持摘要 + System Prompt + 最近对话的智能重建
 
 ## 快速开始
 
@@ -159,12 +161,14 @@ class LlamaChat {
     required LlamaEngine engine,
     String systemPrompt = '',
     int maxTokens = 1024,
+    Future<String> Function(String conversationText)? summarizeCallback,
   });
 
   List<LlamaChatMessage> get history;
   Stream<LlamaChatMessage> get onMessage;
   bool get isReady;
   bool get isGenerating;
+  String get conversationSummary;  // 当前对话摘要
 
   void clearHistory();
   void stop();
@@ -230,6 +234,79 @@ class LlamaException implements Exception {
   // ...
 }
 ```
+
+## 智能上下文压缩
+
+当对话超过 context window 限制时，LlamaChat 支持自动压缩历史对话，而不是简单丢弃。
+
+### 工作原理
+
+```
+Context 溢出检测 → 生成摘要 → KV Cache 重建
+     ↓                ↓              ↓
+  _nPast + tokens  summarizeCallback  清空 KV
+  > nCtx           (用户自定义)       ↓
+                                    System Prompt
+                                    + 摘要
+                                    + 最近对话
+```
+
+### 使用方式
+
+```dart
+final chat = LlamaChat(
+  engine: engine,
+  systemPrompt: '你是一个 AI 助手',
+  summarizeCallback: (conversationText) async {
+    // 方案 1: 使用新的 LlamaEngine 生成摘要
+    final summaryEngine = LlamaEngine();
+    await summaryEngine.load(modelPath);
+    
+    final prompt = '请总结以下对话，保留关键信息，不超过200字：\n$conversationText';
+    final tokens = await summaryEngine.tokenize(prompt, addBos: false);
+    
+    final buffer = StringBuffer();
+    await for (final gen in summaryEngine.generate(tokens, maxTokens: 256)) {
+      buffer.write(gen.text);
+      if (gen.isEnd) break;
+    }
+    
+    await summaryEngine.dispose();
+    return buffer.toString();
+    
+    // 方案 2: 使用外部 API (如 OpenAI)
+    // return await openAI.summarize(conversationText);
+    
+    // 方案 3: 简单截断
+    // return conversationText.length > 500 
+    //     ? conversationText.substring(0, 500) 
+    //     : conversationText;
+  },
+);
+
+// 查看当前摘要
+print('摘要: ${chat.conversationSummary}');
+```
+
+### KV Cache 重建流程
+
+1. **检测溢出**: `_nPast + newTokens > nCtx`
+2. **请求摘要**: 调用 `summarizeCallback(conversationText)`
+3. **清空 KV Cache**: `llama_memory_clear` + `llama_synchronize`
+4. **重建顺序**:
+   - System Prompt tokens (始终保留)
+   - 摘要 tokens (`对话历史摘要：{summary}\n\n`)
+   - 最近对话 tokens (尽可能多)
+
+### 优势
+
+| 特性 | 说明 |
+|------|------|
+| 保留 System Prompt | 模型始终遵循初始指令 |
+| 压缩历史 | 摘要保留关键信息，节省 context 空间 |
+| 保留最近对话 | 最新交互不会丢失 |
+| 自定义摘要 | 用户可选择摘要生成方式 |
+| M-RoPE 兼容 | 正确处理位置编码，避免崩溃 |
 
 ## 构建说明
 
