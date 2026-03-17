@@ -1,36 +1,26 @@
 import 'dart:async';
 
 import 'package:llama_native/llama_engine.dart';
+import 'package:llama_native/llama_chat_message.dart';
+import 'package:llama_native/src/engine/context/token_generation.dart';
 
-enum MessageRole { user, assistant }
-
-class ChatMessage {
-  final MessageRole role;
-  final String content;
-
-  const ChatMessage({required this.role, required this.content});
-
-  Map<String, String> toMap() => {'role': role == MessageRole.user ? 'user' : 'assistant', 'content': content};
-}
+export 'package:llama_native/llama_chat_message.dart' show LlamaChatMessage, LlamaChatMessageRole;
 
 class LlamaChat {
   final LlamaEngine _engine;
   final String _systemPrompt;
   final int _maxTokens;
 
-  final List<ChatMessage> _history = [];
-  final _messageController = StreamController<ChatMessage>.broadcast();
+  final List<LlamaChatMessage> _history = [];
+  final _messageController = StreamController<LlamaChatMessage>.broadcast();
 
-  LlamaChat({
-    required LlamaEngine engine,
-    String systemPrompt = '',
-    int maxTokens = 1024,
-  })  : _engine = engine,
-        _systemPrompt = systemPrompt,
-        _maxTokens = maxTokens;
+  LlamaChat({required LlamaEngine engine, String systemPrompt = '', int maxTokens = 1024})
+    : _engine = engine,
+      _systemPrompt = systemPrompt,
+      _maxTokens = maxTokens;
 
-  List<ChatMessage> get history => List.unmodifiable(_history);
-  Stream<ChatMessage> get onMessage => _messageController.stream;
+  List<LlamaChatMessage> get history => List.unmodifiable(_history);
+  Stream<LlamaChatMessage> get onMessage => _messageController.stream;
   bool get isReady => _engine.isReady;
 
   void clearHistory() {
@@ -42,20 +32,21 @@ class LlamaChat {
       throw StateError('Engine not ready');
     }
 
-    _history.add(ChatMessage(role: MessageRole.user, content: userMessage));
+    _history.add(LlamaChatMessage.user(userMessage));
     _messageController.add(_history.last);
 
-    final prompt = _buildPrompt();
+    final prompt = await _buildPrompt();
     final tokens = await _engine.tokenize(prompt, addBos: false);
 
     final buffer = StringBuffer();
-    await for (final text in _engine.generate(tokens, maxTokens: _maxTokens)) {
-      buffer.write(text);
-      yield text;
+    await for (final generation in _engine.generate(tokens, maxTokens: _maxTokens)) {
+      buffer.write(generation.text);
+      yield generation.text;
+      if (generation.isEnd) break;
     }
 
     final assistantMessage = buffer.toString();
-    _history.add(ChatMessage(role: MessageRole.assistant, content: assistantMessage));
+    _history.add(LlamaChatMessage.assistant(assistantMessage));
     _messageController.add(_history.last);
   }
 
@@ -67,21 +58,18 @@ class LlamaChat {
     return buffer.toString();
   }
 
-  String _buildPrompt() {
-    final buffer = StringBuffer();
+  Future<String> _buildPrompt() async {
+    final messages = <Map<String, String>>[];
 
     if (_systemPrompt.isNotEmpty) {
-      buffer.write('<|im_start|>system\n$_systemPrompt<|im_end|>\n');
+      messages.add({'role': 'system', 'content': _systemPrompt});
     }
 
     for (final msg in _history) {
-      final role = msg.role == MessageRole.user ? 'user' : 'assistant';
-      buffer.write('<|im_start|>$role\n${msg.content}<|im_end|>\n');
+      messages.add(msg.toMap());
     }
 
-    buffer.write('<|im_start|>assistant\n');
-
-    return buffer.toString();
+    return _engine.applyChatTemplate(messages);
   }
 
   Future<void> reset() async {

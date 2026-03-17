@@ -98,17 +98,17 @@ class LlamaBackend {
       try {
         bindings.llama_backend_init();
       } catch (e) {
-        throw LlamaBackendInitException('Failed to initialize llama backend', platform: currentPlatform);
+        throw LlamaException.backendInit('Failed to initialize llama backend', platform: currentPlatform);
       }
 
       _initialized = true;
       _logger.info('Backend initialized successfully');
     } catch (e) {
       _logger.error('Failed to initialize backend: $e');
-      if (e is LlamaBackendInitException) {
+      if (e is LlamaException) {
         rethrow;
       }
-      throw LlamaBackendInitException(e.toString(), platform: currentPlatform);
+      throw LlamaException.backendInit(e.toString(), platform: currentPlatform);
     }
   }
 

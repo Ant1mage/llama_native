@@ -1,88 +1,52 @@
-/// Llama 模型加载异常
-class LlamaModelLoadException implements Exception {
+/// Llama 错误类型
+enum LlamaErrorType { modelLoad, tokenize, contextInit, sessionState, inference, backendInit, kvCache }
+
+/// Llama 统一异常
+class LlamaException implements Exception {
+  final LlamaErrorType type;
   final String message;
-  final String? filePath;
-  
-  LlamaModelLoadException(this.message, {this.filePath});
+  final Map<String, dynamic>? details;
 
-  @override
-  String toString() => filePath != null 
-      ? 'LlamaModelLoadException: $message (File: $filePath)'
-      : 'LlamaModelLoadException: $message';
-}
+  const LlamaException(this.type, this.message, {this.details});
 
-/// Llama Tokenize 异常
-class LlamaTokenizeException implements Exception {
-  final String message;
-  final String? text;
-  
-  LlamaTokenizeException(this.message, {this.text});
+  factory LlamaException.modelLoad(String message, {String? filePath}) =>
+      LlamaException(LlamaErrorType.modelLoad, message, details: filePath != null ? {'filePath': filePath} : null);
 
-  @override
-  String toString() => text != null 
-      ? 'LlamaTokenizeException: $message (Text: ${text!.length > 50 ? text!.substring(0, 50) + '...' : text})'
-      : 'LlamaTokenizeException: $message';
-}
+  factory LlamaException.tokenize(String message, {String? text}) =>
+      LlamaException(LlamaErrorType.tokenize, message, details: text != null ? {'text': text} : null);
 
-/// Llama 上下文初始化异常
-class LlamaContextInitException implements Exception {
-  final String message;
-  
-  LlamaContextInitException(this.message);
+  factory LlamaException.contextInit(String message) => LlamaException(LlamaErrorType.contextInit, message);
 
-  @override
-  String toString() => 'LlamaContextInitException: $message';
-}
+  factory LlamaException.sessionState(String message) => LlamaException(LlamaErrorType.sessionState, message);
 
-/// Llama 会话状态异常
-class LlamaSessionStateException implements Exception {
-  final String message;
-  
-  LlamaSessionStateException(this.message);
+  factory LlamaException.inference(String message, {int? tokenIndex}) => LlamaException(
+    LlamaErrorType.inference,
+    message,
+    details: tokenIndex != null ? {'tokenIndex': tokenIndex} : null,
+  );
 
-  @override
-  String toString() => 'LlamaSessionStateException: $message';
-}
+  factory LlamaException.backendInit(String message, {String? platform}) =>
+      LlamaException(LlamaErrorType.backendInit, message, details: platform != null ? {'platform': platform} : null);
 
-/// Llama 推理异常
-class LlamaInferenceException implements Exception {
-  final String message;
-  final int? tokenIndex;
-  
-  LlamaInferenceException(this.message, {this.tokenIndex});
-
-  @override
-  String toString() => tokenIndex != null 
-      ? 'LlamaInferenceException: $message (Token: $tokenIndex)'
-      : 'LlamaInferenceException: $message';
-}
-
-/// Llama 后端初始化异常
-class LlamaBackendInitException implements Exception {
-  final String message;
-  final String? platform;
-  
-  LlamaBackendInitException(this.message, {this.platform});
-
-  @override
-  String toString() => platform != null 
-      ? 'LlamaBackendInitException: $message (Platform: $platform)'
-      : 'LlamaBackendInitException: $message';
-}
-
-/// Llama KV Cache 异常
-class LlamaKVCacheException implements Exception {
-  final String message;
-  final int? currentSize;
-  final int? maxSize;
-  
-  LlamaKVCacheException(this.message, {this.currentSize, this.maxSize});
+  factory LlamaException.kvCache(String message, {int? currentSize, int? maxSize}) {
+    final details = <String, dynamic>{};
+    if (currentSize != null) details['currentSize'] = currentSize;
+    if (maxSize != null) details['maxSize'] = maxSize;
+    return LlamaException(LlamaErrorType.kvCache, message, details: details.isEmpty ? null : details);
+  }
 
   @override
   String toString() {
-    if (currentSize != null && maxSize != null) {
-      return 'LlamaKVCacheException: $message (Current: $currentSize, Max: $maxSize)';
+    final buffer = StringBuffer('LlamaException[${type.name}]: $message');
+    if (details != null && details!.isNotEmpty) {
+      buffer.write(' (');
+      final entries = details!.entries.toList();
+      for (var i = 0; i < entries.length; i++) {
+        if (i > 0) buffer.write(', ');
+        buffer.write('${entries[i].key}: ${entries[i].value}');
+      }
+      buffer.write(')');
     }
-    return 'LlamaKVCacheException: $message';
+    return buffer.toString();
   }
 }

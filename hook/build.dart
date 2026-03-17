@@ -9,6 +9,51 @@ class PlatformConfig {
   final bool isSimulator;
 
   PlatformConfig({required this.os, required this.arch, this.isSimulator = false});
+
+  String get normalizedArch {
+    final lowerArch = arch.toLowerCase();
+    if (lowerArch == 'arm64' || lowerArch == 'aarch64') {
+      return 'arm64';
+    } else if (lowerArch == 'x86_64' || lowerArch == 'x64' || lowerArch == 'amd64') {
+      return 'x64';
+    } else if (lowerArch == 'arm' || lowerArch == 'armeabi-v7a' || lowerArch == 'armv7') {
+      return 'arm';
+    }
+    return arch;
+  }
+
+  String get platformDisplayName {
+    if (os == 'ios' && isSimulator) {
+      return 'ios_simulator_$normalizedArch';
+    }
+    return '${os}_$normalizedArch';
+  }
+
+  String get dirName {
+    if (os == 'ios' && isSimulator) {
+      return 'ios_simulator_$normalizedArch';
+    }
+    return '${os}_$normalizedArch';
+  }
+
+  String get artifactName {
+    if (os == 'ios') {
+      if (isSimulator) {
+        return 'llama_ios_simulator_$normalizedArch.tar.gz';
+      } else {
+        return 'llama_ios_device.tar.gz';
+      }
+    } else if (os == 'macos') {
+      return 'llama_macos_$normalizedArch.tar.gz';
+    } else if (os == 'android') {
+      return 'llama_android_$normalizedArch.tar.gz';
+    } else if (os == 'linux') {
+      return 'llama_linux_$normalizedArch.tar.gz';
+    } else if (os == 'windows') {
+      return 'llama_windows_$normalizedArch.tar.gz';
+    }
+    throw UnsupportedError('Unsupported platform: $os');
+  }
 }
 
 void main(List<String> args) async {
@@ -219,42 +264,7 @@ Future<void> runFfigen(String packageRoot) async {
 }
 
 String getDownloadUrl(PlatformConfig config, String tagName) {
-  final artifactName = _getArtifactName(config);
-  return 'https://github.com/Ant1mage/llama_native/releases/download/$tagName/$artifactName';
-}
-
-String _getArtifactName(PlatformConfig config) {
-  final arch = _normalizeArch(config.arch);
-  print('🔧 架构映射: ${config.arch} -> $arch');
-
-  if (config.os == 'ios') {
-    if (config.isSimulator) {
-      return 'llama_ios_simulator_$arch.tar.gz';
-    } else {
-      return 'llama_ios_device.tar.gz';
-    }
-  } else if (config.os == 'macos') {
-    return 'llama_macos_$arch.tar.gz';
-  } else if (config.os == 'android') {
-    return 'llama_android_$arch.tar.gz';
-  } else if (config.os == 'linux') {
-    return 'llama_linux_$arch.tar.gz';
-  } else if (config.os == 'windows') {
-    return 'llama_windows_$arch.tar.gz';
-  }
-  throw UnsupportedError('Unsupported platform: ${config.os}');
-}
-
-String _normalizeArch(String arch) {
-  final lowerArch = arch.toLowerCase();
-  if (lowerArch == 'arm64' || lowerArch == 'aarch64') {
-    return 'arm64';
-  } else if (lowerArch == 'x86_64' || lowerArch == 'x64' || lowerArch == 'amd64') {
-    return 'x64';
-  } else if (lowerArch == 'arm' || lowerArch == 'armeabi-v7a' || lowerArch == 'armv7') {
-    return 'arm';
-  }
-  return arch;
+  return 'https://github.com/Ant1mage/llama_native/releases/download/$tagName/${config.artifactName}';
 }
 
 Future<File> downloadFile(String url, String destinationPath) async {
@@ -339,10 +349,9 @@ String _getMainLibraryName(String os) {
 }
 
 Future<List<File>> processPlatform(PlatformConfig config, String packageRoot, String tagName) async {
-  print('\n========== 处理平台：${config.os}-${config.arch}${config.isSimulator ? '-simulator' : ''} ==========');
+  print('\n========== 处理平台：${config.platformDisplayName} ==========');
 
-  final platformDirName = '${config.os}_${config.arch}${config.isSimulator ? '_simulator' : ''}';
-  final platformDir = Directory(p.join(packageRoot, '.binaries', tagName, platformDirName));
+  final platformDir = Directory(p.join(packageRoot, '.binaries', tagName, config.dirName));
 
   final cachedLibs = await _checkCachedLibraries(platformDir.path, config.os);
   if (cachedLibs.isNotEmpty) {
@@ -351,8 +360,7 @@ Future<List<File>> processPlatform(PlatformConfig config, String packageRoot, St
   }
 
   final downloadUrl = getDownloadUrl(config, tagName);
-  final archiveName = _getArtifactName(config);
-  final archivePath = p.join(platformDir.path, archiveName);
+  final archivePath = p.join(platformDir.path, config.artifactName);
 
   try {
     await platformDir.create(recursive: true);
@@ -369,14 +377,14 @@ Future<List<File>> processPlatform(PlatformConfig config, String packageRoot, St
 
     await archiveFile.delete();
 
-    print('✅ 平台 ${config.os}-${config.arch} 处理完成');
+    print('✅ 平台 ${config.platformDisplayName} 处理完成');
     print('📂 库文件数量：${libFiles.length}');
     for (final lib in libFiles) {
       print('   - ${p.basename(lib.path)}');
     }
     return libFiles;
   } catch (e) {
-    print('❌ 处理平台 ${config.os}-${config.arch} 失败：$e');
+    print('❌ 处理平台 ${config.platformDisplayName} 失败：$e');
     rethrow;
   }
 }

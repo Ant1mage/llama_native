@@ -1,6 +1,7 @@
-import 'dart:async';
 import 'dart:ffi';
-import 'dart:isolate';
+import 'dart:typed_data';
+import 'dart:convert';
+
 import 'package:ffi/ffi.dart';
 
 import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
@@ -28,7 +29,6 @@ class LlamaContext with Disposable {
   bool _disposed = false;
   int _nPast = 0;
 
-  /// 私有构造函数
   LlamaContext._(this._model, this._config) : _logger = Logger('LlamaContext');
 
   factory LlamaContext.create(LlamaModel model, InferenceConfig config) {
@@ -57,7 +57,7 @@ class LlamaContext with Disposable {
 
     final ptr = bindings.llama_init_from_model(_model.handle, ctxParams);
     if (ptr == nullptr) {
-      throw LlamaContextInitException('llama_init_from_model returned null');
+      throw LlamaException.contextInit('llama_init_from_model returned null');
     }
     _ctxPtr = ptr;
 
@@ -68,17 +68,14 @@ class LlamaContext with Disposable {
     _logger.info('Context initialized');
   }
 
-  /// 使用 llama.cpp 原生 API 构建 sampler chain
   Pointer<bindings.llama_sampler> _buildSamplerChain(SamplingConfig sampling) {
     final chainParams = bindings.llama_sampler_chain_default_params();
     final chain = bindings.llama_sampler_chain_init(chainParams);
 
     if (chain == nullptr) {
-      throw LlamaContextInitException('Failed to init sampler chain');
+      throw LlamaException.contextInit('Failed to init sampler chain');
     }
 
-    // 按照 llama.cpp 推荐顺序添加 sampler
-    // 1. penalties（重复惩罚）
     if (sampling.penaltyRepeat != 1.0 || sampling.frequencyPenalty != 0.0 || sampling.presencePenalty != 0.0) {
       bindings.llama_sampler_chain_add(
         chain,
@@ -92,10 +89,8 @@ class LlamaContext with Disposable {
     }
 
     if (sampling.temperature <= 0.0) {
-      // Greedy sampling
       bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_greedy());
     } else {
-      // top-k -> min-p -> top-p -> temperature -> distribution
       if (sampling.topK > 0) {
         bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_top_k(sampling.topK));
       }
@@ -106,13 +101,12 @@ class LlamaContext with Disposable {
         bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_top_p(sampling.topP, 1));
       }
       bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_temp(sampling.temperature));
-      bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_dist(0xFFFFFFFF)); // LLAMA_DEFAULT_SEED
+      bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_dist(0xFFFFFFFF));
     }
 
     return chain;
   }
 
-  /// 获取上下文指针
   Pointer<bindings.llama_context> get handle {
     if (_ctxPtr == null || _disposed) {
       throw StateError('Context is disposed');
@@ -120,7 +114,6 @@ class LlamaContext with Disposable {
     return _ctxPtr!;
   }
 
-  /// 获取 KV Cache 管理器
   KVCacheManager get kvCache {
     if (_kvCache == null) {
       throw StateError('KVCache not initialized');
@@ -128,135 +121,21 @@ class LlamaContext with Disposable {
     return _kvCache!;
   }
 
-  /// 当前已处理的 token 数
   int get nPast => _nPast;
 
-  /// 是否已处置
   bool get isDisposed => _disposed;
 
-  /// 流式生成（在独立 Isolate 中运行，避免阻塞主线程/GPU watchdog）
-  Stream<TokenGeneration> generateStream(List<int> inputTokens, {int maxTokens = 2048, Grammar? grammar}) async* {
+  LlamaModel get model => _model;
+
+  Pointer<bindings.llama_sampler> get sampler {
+    if (_samplerChain == null || _disposed) {
+      throw StateError('Context is disposed');
+    }
+    return _samplerChain!;
+  }
+
+  void decode(List<int> tokens) {
     if (_disposed) throw StateError('Context is disposed');
-    if (inputTokens.isEmpty) return;
-
-    final maxPossibleTokens = _config.nCtx - _nPast - inputTokens.length;
-    if (maxPossibleTokens <= 0) {
-      _logger.error('Context full: nCtx=${_config.nCtx}, nPast=$_nPast, inputTokens=${inputTokens.length}');
-      throw LlamaContextInitException('Context is full, cannot generate more tokens. Call reset() to clear context.');
-    }
-    final actualMaxTokens = maxTokens.clamp(1, maxPossibleTokens);
-
-    if (actualMaxTokens < maxTokens) {
-      _logger.warning('maxTokens reduced from $maxTokens to $actualMaxTokens due to context limit');
-    }
-
-    final receivePort = ReceivePort();
-    Isolate? isolate;
-
-    try {
-      final args = _IsolateArgs(
-        sendPort: receivePort.sendPort,
-        ctxAddress: _ctxPtr!.address,
-        samplerAddress: _samplerChain!.address,
-        vocabAddress: _model.vocab.address,
-        inputTokens: inputTokens,
-        maxTokens: actualMaxTokens,
-        grammarAddress: grammar?.sampler.address ?? 0,
-        nUBatch: _config.nUBatch,
-        currentNPast: _nPast,
-      );
-
-      isolate = await Isolate.spawn(_inferenceIsolate, args);
-
-      await for (final msg in receivePort) {
-        if (msg is _TokenMsg) {
-          final tokenText = _model.detokenize([msg.token]);
-          _logger.debug('Token: ${msg.token}, Text: "$tokenText", isEnd: ${msg.isEnd}');
-          final result = TokenGeneration(token: msg.token, text: tokenText, isEnd: msg.isEnd);
-          _nPast = msg.nPast;
-          _kvCache?.addProcessed(msg.isEnd ? 0 : 1);
-          yield result;
-          if (msg.isEnd) break;
-        } else if (msg is _ErrorMsg) {
-          _logger.error('Inference error: ${msg.message}');
-          throw LlamaContextInitException(msg.message);
-        } else if (msg == null) {
-          break;
-        }
-      }
-    } catch (e) {
-      _logger.error('Error in generateStream: $e');
-      rethrow;
-    } finally {
-      receivePort.close();
-      if (isolate != null) {
-        try {
-          isolate.kill(priority: Isolate.immediate);
-        } catch (e) {
-          _logger.warning('Error killing isolate: $e');
-        }
-      }
-    }
-  }
-
-  /// 在 Isolate 内运行的推理入口（static，不捕获 this）
-  static void _inferenceIsolate(_IsolateArgs args) {
-    final sendPort = args.sendPort;
-
-    try {
-      final ctx = Pointer<bindings.llama_context>.fromAddress(args.ctxAddress);
-      final sampler = Pointer<bindings.llama_sampler>.fromAddress(args.samplerAddress);
-      final vocab = Pointer<bindings.llama_vocab>.fromAddress(args.vocabAddress);
-      final grammarSampler = args.grammarAddress != 0
-          ? Pointer<bindings.llama_sampler>.fromAddress(args.grammarAddress)
-          : nullptr;
-
-      int nPast = args.currentNPast;
-
-      final tokens = args.inputTokens;
-      final prefillChunkSize = args.nUBatch;
-      var offset = 0;
-      while (offset < tokens.length) {
-        final end = (offset + prefillChunkSize).clamp(0, tokens.length);
-        final chunk = tokens.sublist(offset, end);
-        _decodeChunk(ctx, chunk, nPast, sendPort);
-        nPast += chunk.length;
-        offset = end;
-      }
-
-      for (var i = 0; i < args.maxTokens; i++) {
-        try {
-          int sampledToken;
-          if (grammarSampler != nullptr) {
-            sampledToken = bindings.llama_sampler_sample(grammarSampler, ctx, -1);
-            bindings.llama_sampler_accept(grammarSampler, sampledToken);
-          } else {
-            sampledToken = bindings.llama_sampler_sample(sampler, ctx, -1);
-            bindings.llama_sampler_accept(sampler, sampledToken);
-          }
-
-          final isEnd = bindings.llama_token_is_eog(vocab, sampledToken);
-          nPast += 1;
-
-          sendPort.send(_TokenMsg(token: sampledToken, isEnd: isEnd, nPast: nPast));
-
-          if (isEnd) break;
-
-          _decodeChunk(ctx, [sampledToken], nPast - 1, sendPort);
-        } catch (e) {
-          sendPort.send(_ErrorMsg('Error during token generation: ${e.toString()}'));
-          return;
-        }
-      }
-
-      sendPort.send(null);
-    } catch (e) {
-      sendPort.send(_ErrorMsg('Inference isolate error: ${e.toString()}'));
-    }
-  }
-
-  /// 静态方法：解码一批 token（在 Isolate 内调用）
-  static void _decodeChunk(Pointer<bindings.llama_context> ctx, List<int> tokens, int startPos, SendPort sendPort) {
     if (tokens.isEmpty) return;
 
     final nTokens = tokens.length;
@@ -265,7 +144,7 @@ class LlamaContext with Disposable {
     try {
       for (var i = 0; i < nTokens; i++) {
         batch.token.elementAt(i).value = tokens[i];
-        batch.pos.elementAt(i).value = startPos + i;
+        batch.pos.elementAt(i).value = _nPast + i;
         batch.n_seq_id.elementAt(i).value = 1;
         batch.seq_id.elementAt(i).value.elementAt(0).value = 0;
         batch.logits.elementAt(i).value = 0;
@@ -273,22 +152,96 @@ class LlamaContext with Disposable {
       batch.logits.elementAt(nTokens - 1).value = 1;
       batch.n_tokens = nTokens;
 
-      final ret = bindings.llama_decode(ctx, batch);
+      final ret = bindings.llama_decode(_ctxPtr!, batch);
       if (ret < 0) {
-        throw LlamaContextInitException('llama_decode failed: $ret');
+        throw LlamaException.contextInit('llama_decode failed: $ret');
       } else if (ret > 0) {
-        sendPort.send(_ErrorMsg('KV cache full, cannot generate more tokens'));
-        return;
+        throw LlamaException.kvCache('KV cache full, cannot decode batch');
       }
-    } catch (e) {
-      sendPort.send(_ErrorMsg('Decode chunk error: ${e.toString()}'));
-      rethrow;
+
+      _nPast += nTokens;
+      _kvCache?.addProcessed(nTokens);
     } finally {
       bindings.llama_batch_free(batch);
     }
   }
 
-  /// 同步处理 tokens 并更新 KV cache（适用于非流式/预热场景）
+  int sample({Pointer<bindings.llama_sampler>? grammarSampler}) {
+    if (_disposed) throw StateError('Context is disposed');
+
+    int token;
+    if (grammarSampler != null && grammarSampler != nullptr) {
+      token = bindings.llama_sampler_sample(grammarSampler, _ctxPtr!, -1);
+      bindings.llama_sampler_accept(grammarSampler, token);
+    } else {
+      token = bindings.llama_sampler_sample(_samplerChain!, _ctxPtr!, -1);
+      bindings.llama_sampler_accept(_samplerChain!, token);
+    }
+
+    return token;
+  }
+
+  bool isEos(int token) {
+    return bindings.llama_token_is_eog(_model.vocab, token);
+  }
+
+  String detokenizeOne(int token) {
+    var bufferSize = bindings.llama_token_to_piece(_model.vocab, token, nullptr, 0, 0, true);
+
+    if (bufferSize < 0) {
+      bufferSize = -bufferSize;
+    }
+
+    if (bufferSize == 0) {
+      return '';
+    }
+
+    final pieceBuffer = calloc<Char>(bufferSize);
+    try {
+      final actualSize = bindings.llama_token_to_piece(_model.vocab, token, pieceBuffer, bufferSize, 0, true);
+
+      if (actualSize > 0) {
+        final allBytes = <int>[];
+        for (var i = 0; i < actualSize; i++) {
+          final byte = pieceBuffer.elementAt(i).value;
+          allBytes.add(byte < 0 ? byte + 256 : byte);
+        }
+        try {
+          return utf8.decode(allBytes, allowMalformed: true);
+        } catch (e) {
+          return String.fromCharCodes(allBytes);
+        }
+      }
+      return '';
+    } finally {
+      calloc.free(pieceBuffer);
+    }
+  }
+
+  void decodeOne(int token) {
+    if (_disposed) throw StateError('Context is disposed');
+
+    final batch = bindings.llama_batch_init(1, 0, 1);
+    try {
+      batch.token.elementAt(0).value = token;
+      batch.pos.elementAt(0).value = _nPast;
+      batch.n_seq_id.elementAt(0).value = 1;
+      batch.seq_id.elementAt(0).value.elementAt(0).value = 0;
+      batch.logits.elementAt(0).value = 1;
+      batch.n_tokens = 1;
+
+      final ret = bindings.llama_decode(_ctxPtr!, batch);
+      if (ret != 0) {
+        throw LlamaException.inference('Decode failed: $ret');
+      }
+
+      _nPast += 1;
+      _kvCache?.addProcessed(1);
+    } finally {
+      bindings.llama_batch_free(batch);
+    }
+  }
+
   void processTokens(List<int> tokens) {
     if (tokens.isEmpty) return;
 
@@ -307,10 +260,10 @@ class LlamaContext with Disposable {
       final ret = bindings.llama_decode(handle, batch);
       if (ret < 0) {
         _logger.error('llama_decode failed with code $ret');
-        throw LlamaContextInitException('Failed to decode batch: $ret');
+        throw LlamaException.inference('Failed to decode batch: $ret');
       } else if (ret > 0) {
         _logger.warning('llama_decode returned $ret (no KV slot available)');
-        throw LlamaContextInitException('KV cache full, cannot decode batch');
+        throw LlamaException.kvCache('KV cache full, cannot decode batch');
       }
 
       _nPast += nTokens;
@@ -325,12 +278,10 @@ class LlamaContext with Disposable {
     }
   }
 
-  /// 重置上下文（清空 KV cache）
   void reset() {
     _logger.debug('Resetting context, current nPast: $_nPast');
     _nPast = 0;
     _kvCache?.reset();
-    // 重置 sampler 状态
     if (_samplerChain != null) {
       bindings.llama_sampler_reset(_samplerChain!);
       _logger.debug('Reset sampler chain');
@@ -338,10 +289,8 @@ class LlamaContext with Disposable {
     _logger.info('Context reset successfully');
   }
 
-  /// 获取剩余上下文空间
   int get remainingContext => _config.nCtx - _nPast;
 
-  /// 是否需要截断
   bool get needsTruncation => remainingContext < _config.nBatch;
 
   @override
@@ -366,46 +315,4 @@ class LlamaContext with Disposable {
 
     _logger.info('Context disposed');
   }
-}
-
-// ── Isolate 通信数据结构 ─────────────────────────────────────────────────────
-
-/// Isolate 入口参数（所有字段均为可跨 Isolate 传递的基本类型）
-class _IsolateArgs {
-  final SendPort sendPort;
-  final int ctxAddress;
-  final int samplerAddress;
-  final int vocabAddress;
-  final List<int> inputTokens;
-  final int maxTokens;
-  final int grammarAddress;
-  final int nUBatch;
-  final int currentNPast;
-
-  const _IsolateArgs({
-    required this.sendPort,
-    required this.ctxAddress,
-    required this.samplerAddress,
-    required this.vocabAddress,
-    required this.inputTokens,
-    required this.maxTokens,
-    required this.grammarAddress,
-    required this.nUBatch,
-    required this.currentNPast,
-  });
-}
-
-/// Isolate 发回主 Isolate 的 token 消息
-class _TokenMsg {
-  final int token;
-  final bool isEnd;
-  final int nPast;
-
-  const _TokenMsg({required this.token, required this.isEnd, required this.nPast});
-}
-
-/// Isolate 发回主 Isolate 的错误消息
-class _ErrorMsg {
-  final String message;
-  const _ErrorMsg(this.message);
 }

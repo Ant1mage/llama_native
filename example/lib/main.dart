@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:llama_native/llama_native.dart';
+import 'package:path_provider/path_provider.dart';
 
 void main() {
   runApp(const LlamaChatApp());
@@ -98,10 +100,47 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _pickModel() async {
     try {
-      final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['gguf']);
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.any, // 强制允许点击所有文件
+        allowMultiple: false,
+      );
+
+      if (result != null) {
+        String path = result.files.single.path!;
+        if (path.endsWith('.gguf')) {
+          print("成功选中模型: $path");
+          // 传给你的 C++ Wrapper
+        } else {
+          print("请选择正确的 GGUF 文件");
+        }
+      }
 
       if (result != null && result.files.single.path != null) {
-        await _engine.load(result.files.single.path!);
+        String destinationPath;
+        if (Platform.isIOS) {
+          String originalPath = result.files.single.path!;
+
+          // 1. 获取 App 自己的私有目录
+          final docsDir = await getApplicationDocumentsDirectory();
+          final fileName = result.files.single.name;
+          destinationPath = "${docsDir.path}/$fileName";
+
+          // 2. 如果文件不在私有目录，拷贝一份（或者如果已存在则跳过）
+          final sourceFile = File(originalPath);
+          final destinationFile = File(destinationPath);
+
+          if (!await destinationFile.exists()) {
+            print("正在拷贝模型到沙盒，请稍候...");
+            await sourceFile.copy(destinationPath);
+          }
+
+          // 3. 将稳定、有权限的沙盒路径传给 C++
+          print("加载模型: $destinationPath");
+        } else {
+          destinationPath = result.files.single.path!;
+        }
+
+        await _engine.load(destinationPath);
       }
     } catch (e) {
       setState(() {
@@ -117,8 +156,8 @@ class _ChatPageState extends State<ChatPage> {
     _controller.clear();
 
     setState(() {
-      _messages.add(_DisplayMessage(role: MessageRole.user, content: text));
-      _messages.add(_DisplayMessage(role: MessageRole.assistant, content: '', isStreaming: true));
+      _messages.add(_DisplayMessage(role: LlamaChatMessageRole.user, content: text));
+      _messages.add(_DisplayMessage(role: LlamaChatMessageRole.assistant, content: '', isStreaming: true));
     });
 
     _scrollToBottom();
@@ -129,18 +168,30 @@ class _ChatPageState extends State<ChatPage> {
         buffer.write(tokenText);
 
         setState(() {
-          _messages.last = _DisplayMessage(role: MessageRole.assistant, content: buffer.toString(), isStreaming: true);
+          _messages.last = _DisplayMessage(
+            role: LlamaChatMessageRole.assistant,
+            content: buffer.toString(),
+            isStreaming: true,
+          );
         });
 
         _scrollToBottom();
       }
 
       setState(() {
-        _messages.last = _DisplayMessage(role: MessageRole.assistant, content: buffer.toString(), isStreaming: false);
+        _messages.last = _DisplayMessage(
+          role: LlamaChatMessageRole.assistant,
+          content: buffer.toString(),
+          isStreaming: false,
+        );
       });
     } catch (e) {
       setState(() {
-        _messages.last = _DisplayMessage(role: MessageRole.assistant, content: '生成回复时出错: $e', isStreaming: false);
+        _messages.last = _DisplayMessage(
+          role: LlamaChatMessageRole.assistant,
+          content: '生成回复时出错: $e',
+          isStreaming: false,
+        );
       });
     }
   }
@@ -251,7 +302,9 @@ class _ChatPageState extends State<ChatPage> {
                             child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                           )
                         : const Icon(Icons.send),
-                    onPressed: _engine.isReady && (_messages.isEmpty || !_messages.last.isStreaming) ? _sendMessage : null,
+                    onPressed: _engine.isReady && (_messages.isEmpty || !_messages.last.isStreaming)
+                        ? _sendMessage
+                        : null,
                   ),
                 ],
               ),
@@ -270,7 +323,7 @@ class _MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isUser = message.role == MessageRole.user;
+    final isUser = message.role == LlamaChatMessageRole.user;
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -311,7 +364,7 @@ class _MessageBubble extends StatelessWidget {
 }
 
 class _DisplayMessage {
-  final MessageRole role;
+  final LlamaChatMessageRole role;
   final String content;
   final bool isStreaming;
 

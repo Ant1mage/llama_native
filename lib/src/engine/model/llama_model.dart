@@ -132,7 +132,7 @@ class LlamaModel with Disposable {
 
       if (ptr == nullptr) {
         _logger.error('Failed to load model: ${_config.modelPath}');
-        throw LlamaModelLoadException('Failed to load model from file', filePath: _config.modelPath);
+        throw LlamaException.modelLoad('Failed to load model from file', filePath: _config.modelPath);
       }
 
       _modelPtr = ptr;
@@ -252,7 +252,7 @@ class LlamaModel with Disposable {
 
         if (n < 0) {
           _logger.error('Tokenization failed with code: $n for text: $text');
-          throw LlamaTokenizeException('Tokenization failed for text (code=$n)', text: text);
+          throw LlamaException.tokenize('Tokenization failed for text (code=$n)', text: text);
         }
 
         // 转换为 Dart List
@@ -263,7 +263,7 @@ class LlamaModel with Disposable {
         return result;
       } catch (e) {
         _logger.error('Error during tokenization: $e');
-        throw LlamaTokenizeException('Tokenization failed: ${e.toString()}');
+        throw LlamaException.tokenize('Tokenization failed: ${e.toString()}');
       } finally {
         calloc.free(tokens);
       }

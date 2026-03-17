@@ -1,8 +1,7 @@
-
-import 'llama_batch.dart';
+import 'package:llama_native/src/engine/batch/llama_batch.dart';
 
 /// 批处理构建器
-class BatchBuilder {
+class LlamaBatchBuilder {
   final List<List<int>> _sequences = [];
   bool _logitsAll = false;
 

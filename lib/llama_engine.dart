@@ -1,6 +1,7 @@
 import 'dart:async';
 
-import 'package:llama_native/src/engine/isolate/llama_isolate.dart';
+import 'package:llama_native/src/llama_isolate.dart';
+import 'package:llama_native/src/engine/context/token_generation.dart';
 import 'package:llama_native/src/utils/platform_info.dart';
 
 enum LoadState { idle, initializing, loading, ready, error }
@@ -83,7 +84,14 @@ class LlamaEngine {
     return _isolate!.tokenize(text, addBos: addBos);
   }
 
-  Stream<String> generate(List<int> tokens, {int maxTokens = 1024}) {
+  Future<String> applyChatTemplate(List<Map<String, String>> messages) async {
+    if (!isReady || _isolate == null) {
+      throw StateError('Engine not ready');
+    }
+    return _isolate!.applyChatTemplate(messages);
+  }
+
+  Stream<TokenGeneration> generate(List<int> tokens, {int maxTokens = 1024}) {
     if (!isReady || _isolate == null) {
       throw StateError('Engine not ready');
     }
