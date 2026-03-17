@@ -1,7 +1,8 @@
-import 'package:llama_native/llama_native_bindings.dart' as bindings;
-import 'package:llama_native/src/logging/logger.dart';
+import 'dart:io';
+import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
+import 'package:llama_native/src/log/logger.dart';
 import 'package:llama_native/src/utils/platform_info.dart';
-import 'package:llama_native/src/exceptions/llama_exceptions.dart';
+import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
 import 'llama_backend_config.dart';
 
 class LlamaBackend {
@@ -15,7 +16,20 @@ class LlamaBackend {
 
   static LlamaBackend get instance {
     if (_instance == null) {
-      final config = PlatformInfo.createDefaultBackendConfig();
+      LlamaBackendConfig config;
+      if (Platform.isMacOS) {
+        config = LlamaBackendConfig.defaultMacOS();
+      } else if (Platform.isAndroid) {
+        config = LlamaBackendConfig.defaultAndroid();
+      } else if (Platform.isWindows) {
+        config = LlamaBackendConfig.defaultWindows();
+      } else if (Platform.isLinux) {
+        config = LlamaBackendConfig.defaultLinux();
+      } else if (Platform.isIOS) {
+        config = LlamaBackendConfig.defaultIOS();
+      } else {
+        config = const LlamaBackendConfig();
+      }
       _instance = LlamaBackend._(config);
     }
     return _instance!;

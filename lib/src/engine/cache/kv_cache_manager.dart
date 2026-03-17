@@ -1,6 +1,6 @@
 import 'dart:ffi';
-import 'package:llama_native/llama_native_bindings.dart' as bindings;
-import 'package:llama_native/src/logging/logger.dart';
+import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
+import 'package:llama_native/src/log/logger.dart';
 import 'package:llama_native/src/utils/disposable.dart';
 
 /// Llama KV Cache 管理器
@@ -96,17 +96,13 @@ class KVCacheManager with Disposable {
 
       // 执行实际的缓存操作
       if (_keepPrefix > 0) {
-        // 保留前缀，只截断历史部分
         final historyLength = targetLength - _keepPrefix;
         if (historyLength > 0) {
           _nPast = _keepPrefix + historyLength;
-          // 这里可以添加实际的内存操作逻辑
           _logger.info('Truncated to $_nPast tokens (keeping $keepPrefix prefix)');
         }
       } else {
-        // 直接截断到目标长度
         _nPast = targetLength;
-        // 这里可以添加实际的内存操作逻辑
         _logger.info('Truncated to $_nPast tokens');
       }
     } catch (e) {
@@ -128,7 +124,8 @@ class KVCacheManager with Disposable {
     _nPast = 0;
     if (_ctx != null) {
       try {
-        // 这里可以添加实际的内存重置逻辑
+        final mem = bindings.llama_get_memory(_ctx!);
+        bindings.llama_memory_clear(mem, true);
         _logger.debug('KV Cache reset');
       } catch (e) {
         _logger.error('Error during cache reset: $e');

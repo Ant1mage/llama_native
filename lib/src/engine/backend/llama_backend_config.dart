@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:llama_native/llama_native_bindings.dart' as bindings;
+import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
 import 'package:llama_native/src/utils/platform_info.dart';
 
 class LlamaBackendConfig {

@@ -2,10 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 
-import 'package:llama_native/llama_native_bindings.dart' as bindings;
-import 'package:llama_native/src/function/function_definition.dart';
-import 'package:llama_native/src/grammar/grammar.dart';
-import 'package:llama_native/src/logging/logger.dart';
+import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
+import 'package:llama_native/src/engine/function/function_definition.dart';
+import 'package:llama_native/src/engine/grammar/grammar.dart';
+import 'package:llama_native/src/log/logger.dart';
 
 /// Function Calling 管理器
 ///

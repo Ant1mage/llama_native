@@ -1,7 +1,7 @@
 # Run with `dart run ffigen --config ffigen.yaml`.
 name: LlamaNativeBindings
 description: Bindings for llama.cpp library.
-output: 'lib/llama_native_bindings.dart'
+output: 'lib/src/llama_native_bindings.dart'
 
 ffi-native:
   asset-id: 'package:llama_native/llama_native'

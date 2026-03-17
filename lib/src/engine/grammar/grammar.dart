@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'package:ffi/ffi.dart';
-import 'package:llama_native/llama_native_bindings.dart' as bindings;
-import 'package:llama_native/src/grammar/json_schema_to_gbnf.dart';
-import 'package:llama_native/src/logging/logger.dart';
+import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
+import 'package:llama_native/src/engine/grammar/json_schema_to_gbnf.dart';
+import 'package:llama_native/src/log/logger.dart';
 import 'package:llama_native/src/utils/disposable.dart';
 
 /// Grammar 配置

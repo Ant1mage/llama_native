@@ -3,11 +3,11 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:convert';
 import 'package:ffi/ffi.dart';
-import 'package:llama_native/llama_native_bindings.dart' as bindings;
-import 'package:llama_native/src/backend/llama_backend.dart';
-import 'package:llama_native/src/logging/logger.dart';
+import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
+import 'package:llama_native/src/engine/backend/llama_backend.dart';
+import 'package:llama_native/src/log/logger.dart';
 import 'package:llama_native/src/utils/disposable.dart';
-import 'package:llama_native/src/exceptions/llama_exceptions.dart';
+import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
 
 /// Llama 模型配置
 class LlamaModelConfig {

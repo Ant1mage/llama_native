@@ -3,18 +3,18 @@ import 'dart:ffi';
 import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 
-import 'package:llama_native/llama_native_bindings.dart' as bindings;
-import 'package:llama_native/src/backend/llama_backend.dart';
-import 'package:llama_native/src/backend/llama_backend_config.dart';
-import 'package:llama_native/src/model/llama_model.dart';
-import 'package:llama_native/src/context/inference_config.dart';
-import 'package:llama_native/src/context/token_generation.dart';
-import 'package:llama_native/src/sampling/sampling_config.dart';
-import 'package:llama_native/src/cache/kv_cache_manager.dart';
-import 'package:llama_native/src/logging/logger.dart';
+import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
+import 'package:llama_native/src/engine/backend/llama_backend.dart';
+import 'package:llama_native/src/engine/backend/llama_backend_config.dart';
+import 'package:llama_native/src/engine/model/llama_model.dart';
+import 'package:llama_native/src/engine/context/inference_config.dart';
+import 'package:llama_native/src/engine/context/token_generation.dart';
+import 'package:llama_native/src/engine/sampling/sampling_config.dart';
+import 'package:llama_native/src/engine/cache/kv_cache_manager.dart';
+import 'package:llama_native/src/log/logger.dart';
 import 'package:llama_native/src/utils/disposable.dart';
-import 'package:llama_native/src/exceptions/llama_exceptions.dart';
-import 'package:llama_native/src/grammar/grammar.dart';
+import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
+import 'package:llama_native/src/engine/grammar/grammar.dart';
 
 /// 推理执行引擎
 class LlamaContext with Disposable {

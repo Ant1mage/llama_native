@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:llama_native/llama_native.dart';
+import 'package:llama_native/src/llama_native.dart';
 
 void main() {
   group('LlamaModelConfig', () {

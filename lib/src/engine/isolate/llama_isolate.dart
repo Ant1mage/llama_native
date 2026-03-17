@@ -4,9 +4,9 @@ import 'dart:ffi';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
-import 'package:llama_native/llama_native_bindings.dart' as bindings;
-import 'package:llama_native/src/logging/logger.dart';
-import 'package:llama_native/src/sampling/sampling_config.dart';
+import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
+import 'package:llama_native/src/log/logger.dart';
+import 'package:llama_native/src/engine/sampling/sampling_config.dart';
 
 enum _MessageType {
   loadModel,

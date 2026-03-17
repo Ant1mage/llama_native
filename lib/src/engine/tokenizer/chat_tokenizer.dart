@@ -1,8 +1,8 @@
 import 'dart:ffi';
 import 'package:ffi/ffi.dart';
-import 'package:llama_native/llama_native_bindings.dart' as bindings;
-import 'package:llama_native/src/model/llama_model.dart';
-import 'package:llama_native/src/logging/logger.dart';
+import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
+import 'package:llama_native/src/engine/model/llama_model.dart';
+import 'package:llama_native/src/log/logger.dart';
 
 /// Chat Template 类型
 enum ChatTemplateType {

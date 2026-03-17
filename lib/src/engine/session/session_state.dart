@@ -2,11 +2,11 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
-import 'package:llama_native/src/cache/kv_cache_snapshot.dart';
+import 'package:llama_native/src/engine/cache/kv_cache_snapshot.dart';
 import 'package:llama_native/src/utils/disposable.dart';
-import 'package:llama_native/src/context/llama_context.dart';
-import 'package:llama_native/src/logging/logger.dart';
-import 'package:llama_native/src/exceptions/llama_exceptions.dart';
+import 'package:llama_native/src/engine/context/llama_context.dart';
+import 'package:llama_native/src/log/logger.dart';
+import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
 
 /// 持久化快照
 ///

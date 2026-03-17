@@ -1,5 +1,5 @@
 import 'kv_cache_manager.dart';
-import 'package:llama_native/src/logging/logger.dart';
+import 'package:llama_native/src/log/logger.dart';
 
 /// KV Cache 快照 (简化版)
 class KVCacheSnapshot {

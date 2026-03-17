@@ -29,21 +29,70 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> {
-  final List<AppChatMessage> _messages = [];
+  final List<_DisplayMessage> _messages = [];
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
-  LlamaIsolate? _isolate;
-  bool _isLoading = false;
-  bool _isModelLoaded = false;
-  String? _modelPath;
+  final LlamaEngine _engine = LlamaEngine();
+  LlamaChat? _chat;
+
   String _statusText = '请选择模型文件开始';
+
+  @override
+  void initState() {
+    super.initState();
+    _engine.onStateChange.listen((state) {
+      setState(() {
+        switch (state) {
+          case LoadState.idle:
+            _statusText = '请选择模型文件开始';
+            break;
+          case LoadState.initializing:
+            _statusText = '正在初始化...';
+            break;
+          case LoadState.loading:
+            _statusText = '正在加载模型...';
+            break;
+          case LoadState.ready:
+            _statusText = '模型已就绪';
+            _chat = LlamaChat(engine: _engine);
+            break;
+          case LoadState.error:
+            _statusText = '错误: ${_engine.error}';
+            break;
+        }
+      });
+    });
+
+    _engine.onProgress.listen((progress) {
+      setState(() {
+        switch (progress) {
+          case LoadProgress.initializing:
+            _statusText = '正在初始化...';
+            break;
+          case LoadProgress.allocatingMemory:
+            _statusText = '正在分配内存...';
+            break;
+          case LoadProgress.loadingModel:
+            _statusText = '正在加载模型...';
+            break;
+          case LoadProgress.creatingContext:
+            _statusText = '正在创建上下文...';
+            break;
+          case LoadProgress.ready:
+            _statusText = '模型已就绪';
+            break;
+        }
+      });
+    });
+  }
 
   @override
   void dispose() {
     _controller.dispose();
     _scrollController.dispose();
-    _isolate?.dispose();
+    _chat?.dispose();
+    _engine.dispose();
     super.dispose();
   }
 
@@ -52,11 +101,7 @@ class _ChatPageState extends State<ChatPage> {
       final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['gguf']);
 
       if (result != null && result.files.single.path != null) {
-        setState(() {
-          _modelPath = result.files.single.path;
-          _statusText = '已选择模型: ${result.files.single.name}';
-        });
-        await _loadModel();
+        await _engine.load(result.files.single.path!);
       }
     } catch (e) {
       setState(() {
@@ -65,118 +110,39 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Future<void> _loadModel() async {
-    if (_modelPath == null) return;
-
-    setState(() {
-      _isLoading = true;
-      _statusText = '正在初始化 Isolate...';
-    });
-
-    try {
-      _isolate = LlamaIsolate();
-      await _isolate!.initialize();
-
-      setState(() {
-        _statusText = '正在加载模型...';
-      });
-
-      final gpuLayers = PlatformInfo.recommendedGpuLayers();
-      final nCtx = PlatformInfo.recommendedContextLength();
-      final nThreads = PlatformInfo.recommendedThreads();
-      final nBatch = PlatformInfo.recommendedBatchSize();
-
-      debugPrint('GPU Layers: $gpuLayers, Context: $nCtx, Threads: $nThreads, Batch: $nBatch');
-
-      final config = LlamaIsolateConfig(
-        modelPath: _modelPath!,
-        nCtx: nCtx,
-        nBatch: nBatch,
-        nUBatch: PlatformInfo.recommendedUBatchSize(),
-        nThreads: nThreads,
-        nGpuLayers: gpuLayers,
-        sampling: const SamplingConfig(temperature: 0.7, topP: 0.9, topK: 40),
-      );
-
-      final success = await _isolate!.loadModel(config);
-
-      if (success) {
-        setState(() {
-          _isModelLoaded = true;
-          _isLoading = false;
-          _statusText = '模型加载成功 (GPU: $gpuLayers, Context: $nCtx)';
-        });
-      } else {
-        setState(() {
-          _isLoading = false;
-          _statusText = '模型加载失败';
-        });
-      }
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _statusText = '加载模型失败: $e';
-      });
-    }
-  }
-
   Future<void> _sendMessage() async {
     final text = _controller.text.trim();
-    if (text.isEmpty || !_isModelLoaded || _isLoading) return;
+    if (text.isEmpty || !_engine.isReady) return;
 
     _controller.clear();
 
     setState(() {
-      _messages.add(AppChatMessage(role: MessageRole.user, content: text));
-      _messages.add(AppChatMessage(role: MessageRole.assistant, content: '', isStreaming: true));
-      _isLoading = true;
+      _messages.add(_DisplayMessage(role: MessageRole.user, content: text));
+      _messages.add(_DisplayMessage(role: MessageRole.assistant, content: '', isStreaming: true));
     });
 
     _scrollToBottom();
 
     try {
-      final prompt = _buildPrompt();
-      debugPrint('=== Prompt ===\n$prompt\n=============');
-
-      final tokens = await _isolate!.tokenize(prompt, addBos: false);
-      debugPrint('=== Tokens (${tokens.length}) ===');
-
       final buffer = StringBuffer();
-      await for (final tokenText in _isolate!.generate(tokens, maxTokens: 1024)) {
+      await for (final tokenText in _chat!.sendMessage(text)) {
         buffer.write(tokenText);
 
         setState(() {
-          _messages.last = AppChatMessage(role: MessageRole.assistant, content: buffer.toString(), isStreaming: true);
+          _messages.last = _DisplayMessage(role: MessageRole.assistant, content: buffer.toString(), isStreaming: true);
         });
 
         _scrollToBottom();
       }
 
       setState(() {
-        _messages.last = AppChatMessage(role: MessageRole.assistant, content: buffer.toString(), isStreaming: false);
-        _isLoading = false;
+        _messages.last = _DisplayMessage(role: MessageRole.assistant, content: buffer.toString(), isStreaming: false);
       });
     } catch (e) {
       setState(() {
-        _messages.last = AppChatMessage(role: MessageRole.assistant, content: '生成回复时出错: $e', isStreaming: false);
-        _isLoading = false;
+        _messages.last = _DisplayMessage(role: MessageRole.assistant, content: '生成回复时出错: $e', isStreaming: false);
       });
     }
-  }
-
-  String _buildPrompt() {
-    final buffer = StringBuffer();
-
-    for (final message in _messages.where((m) => !m.isStreaming)) {
-      if (message.role == MessageRole.user) {
-        buffer.write('<|im_start|>user\n${message.content}<|im_end|>\n');
-      } else {
-        buffer.write('<|im_start|>assistant\n${message.content}<|im_end|>\n');
-      }
-    }
-
-    buffer.write('<|im_start|>assistant\n');
-    return buffer.toString();
   }
 
   void _scrollToBottom() {
@@ -194,7 +160,7 @@ class _ChatPageState extends State<ChatPage> {
   void _clearChat() {
     setState(() {
       _messages.clear();
-      _isolate?.reset();
+      _chat?.reset();
     });
   }
 
@@ -204,7 +170,11 @@ class _ChatPageState extends State<ChatPage> {
       appBar: AppBar(
         title: const Text('Llama Chat'),
         actions: [
-          IconButton(icon: const Icon(Icons.folder_open), tooltip: '选择模型', onPressed: _isLoading ? null : _pickModel),
+          IconButton(
+            icon: const Icon(Icons.folder_open),
+            tooltip: '选择模型',
+            onPressed: _engine.state == LoadState.loading ? null : _pickModel,
+          ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
             tooltip: '清空对话',
@@ -229,7 +199,7 @@ class _ChatPageState extends State<ChatPage> {
                         Icon(Icons.chat_bubble_outline, size: 64, color: Theme.of(context).colorScheme.outline),
                         const SizedBox(height: 16),
                         Text(
-                          _isModelLoaded ? '开始对话吧！' : '请先加载模型',
+                          _engine.isReady ? '开始对话吧！' : '请先加载模型',
                           style: Theme.of(
                             context,
                           ).textTheme.bodyLarge?.copyWith(color: Theme.of(context).colorScheme.outline),
@@ -262,26 +232,26 @@ class _ChatPageState extends State<ChatPage> {
                     child: TextField(
                       controller: _controller,
                       decoration: InputDecoration(
-                        hintText: _isModelLoaded ? '输入消息...' : '请先加载模型',
+                        hintText: _engine.isReady ? '输入消息...' : '请先加载模型',
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
                         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                       ),
                       maxLines: null,
                       textInputAction: TextInputAction.send,
                       onSubmitted: (_) => _sendMessage(),
-                      enabled: _isModelLoaded && !_isLoading,
+                      enabled: _engine.isReady,
                     ),
                   ),
                   const SizedBox(width: 8),
                   IconButton.filled(
-                    icon: _isLoading
+                    icon: _messages.isNotEmpty && _messages.last.isStreaming
                         ? const SizedBox(
                             width: 20,
                             height: 20,
                             child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                           )
                         : const Icon(Icons.send),
-                    onPressed: _isLoading || !_isModelLoaded ? null : _sendMessage,
+                    onPressed: _engine.isReady && (_messages.isEmpty || !_messages.last.isStreaming) ? _sendMessage : null,
                   ),
                 ],
               ),
@@ -294,7 +264,7 @@ class _ChatPageState extends State<ChatPage> {
 }
 
 class _MessageBubble extends StatelessWidget {
-  final AppChatMessage message;
+  final _DisplayMessage message;
 
   const _MessageBubble({required this.message});
 
@@ -340,10 +310,10 @@ class _MessageBubble extends StatelessWidget {
   }
 }
 
-class AppChatMessage {
+class _DisplayMessage {
   final MessageRole role;
   final String content;
   final bool isStreaming;
 
-  AppChatMessage({required this.role, required this.content, this.isStreaming = false});
+  _DisplayMessage({required this.role, required this.content, this.isStreaming = false});
 }

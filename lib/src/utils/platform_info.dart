@@ -1,6 +1,5 @@
 import 'dart:io';
-import 'package:llama_native/llama_native.dart';
-import 'package:llama_native/llama_native_bindings.dart' as bindings;
+import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
 
 enum HardwareAcceleration { metal, cuda, vulkan, cpu }
 
@@ -245,14 +244,5 @@ class PlatformInfo {
     buffer.writeln('Batch Size: ${recommendedBatchSize()}');
     buffer.writeln('Threads: ${recommendedThreads()}');
     return buffer.toString();
-  }
-
-  static LlamaBackendConfig createDefaultBackendConfig() {
-    if (Platform.isMacOS) return LlamaBackendConfig.defaultMacOS();
-    if (Platform.isAndroid) return LlamaBackendConfig.defaultAndroid();
-    if (Platform.isWindows) return LlamaBackendConfig.defaultWindows();
-    if (Platform.isLinux) return LlamaBackendConfig.defaultLinux();
-    if (Platform.isIOS) return LlamaBackendConfig.defaultIOS();
-    return const LlamaBackendConfig();
   }
 }

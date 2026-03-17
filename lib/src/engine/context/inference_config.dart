@@ -1,4 +1,4 @@
-import 'package:llama_native/src/sampling/sampling_config.dart';
+import 'package:llama_native/src/engine/sampling/sampling_config.dart';
 import 'package:llama_native/src/utils/platform_info.dart';
 import 'dart:io';
 
