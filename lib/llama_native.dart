@@ -50,3 +50,6 @@ export 'package:llama_native/src/function/function_manager.dart'
 
 // Logging
 export 'package:llama_native/src/logging/logger.dart' show Logger;
+
+// Isolate
+export 'package:llama_native/src/isolate/llama_isolate.dart' show LlamaIsolate, LlamaIsolateConfig;

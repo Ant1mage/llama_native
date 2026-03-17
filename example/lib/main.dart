@@ -33,8 +33,7 @@ class _ChatPageState extends State<ChatPage> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
-  LlamaModel? _model;
-  LlamaContext? _context;
+  LlamaIsolate? _isolate;
   bool _isLoading = false;
   bool _isModelLoaded = false;
   String? _modelPath;
@@ -44,9 +43,7 @@ class _ChatPageState extends State<ChatPage> {
   void dispose() {
     _controller.dispose();
     _scrollController.dispose();
-    _context?.dispose();
-    _model?.dispose();
-    LlamaBackend.instance.dispose();
+    _isolate?.dispose();
     super.dispose();
   }
 
@@ -73,32 +70,48 @@ class _ChatPageState extends State<ChatPage> {
 
     setState(() {
       _isLoading = true;
-      _statusText = '正在加载模型...';
+      _statusText = '正在初始化 Isolate...';
     });
 
     try {
-      final backend = LlamaBackend.instance;
-      await backend.initialize();
-
-      final modelConfig = LlamaModelConfig(modelPath: _modelPath!);
-      _model = LlamaModel.load(modelConfig);
-
-      final metadata = _model!.getMetadata();
-      debugPrint('Model: ${metadata.name}, Context: ${metadata.contextLength}');
-
-      final inferenceConfig = InferenceConfig.defaultMacOS(
-        sampling: SamplingConfig(temperature: 0.7, topP: 0.9, topK: 40),
-      );
-
-      debugPrint('Using config: $inferenceConfig');
-
-      _context = LlamaContext.create(_model!, inferenceConfig);
+      _isolate = LlamaIsolate();
+      await _isolate!.initialize();
 
       setState(() {
-        _isModelLoaded = true;
-        _isLoading = false;
-        _statusText = '模型加载成功 (GPU layers: ${inferenceConfig.nGpuLayers}, Context: ${inferenceConfig.nCtx})';
+        _statusText = '正在加载模型...';
       });
+
+      final gpuLayers = PlatformInfo.recommendedGpuLayers();
+      final nCtx = PlatformInfo.recommendedContextLength();
+      final nThreads = PlatformInfo.recommendedThreads();
+      final nBatch = PlatformInfo.recommendedBatchSize();
+
+      debugPrint('GPU Layers: $gpuLayers, Context: $nCtx, Threads: $nThreads, Batch: $nBatch');
+
+      final config = LlamaIsolateConfig(
+        modelPath: _modelPath!,
+        nCtx: nCtx,
+        nBatch: nBatch,
+        nUBatch: PlatformInfo.recommendedUBatchSize(),
+        nThreads: nThreads,
+        nGpuLayers: gpuLayers,
+        sampling: const SamplingConfig(temperature: 0.7, topP: 0.9, topK: 40),
+      );
+
+      final success = await _isolate!.loadModel(config);
+
+      if (success) {
+        setState(() {
+          _isModelLoaded = true;
+          _isLoading = false;
+          _statusText = '模型加载成功 (GPU: $gpuLayers, Context: $nCtx)';
+        });
+      } else {
+        setState(() {
+          _isLoading = false;
+          _statusText = '模型加载失败';
+        });
+      }
     } catch (e) {
       setState(() {
         _isLoading = false;
@@ -122,36 +135,21 @@ class _ChatPageState extends State<ChatPage> {
     _scrollToBottom();
 
     try {
-      final chatTokenizer = ChatTokenizer(model: _model!, templateType: ChatTemplateType.chatml);
-
-      final chatMessages = _messages
-          .where((m) => !m.isStreaming)
-          .map((m) => ChatMessage(role: m.role, content: m.content))
-          .toList();
-
-      final prompt = chatTokenizer.applyTemplate(chatMessages);
+      final prompt = _buildPrompt();
       debugPrint('=== Prompt ===\n$prompt\n=============');
 
-      final tokens = _model!.tokenize(prompt, addBos: false);
-      debugPrint('=== Tokens (${tokens.length}) ===\n$tokens\n=============');
-
-      final stream = _context!.generateStream(tokens, maxTokens: 1024);
+      final tokens = await _isolate!.tokenize(prompt, addBos: false);
+      debugPrint('=== Tokens (${tokens.length}) ===');
 
       final buffer = StringBuffer();
-      await for (final generation in stream) {
-        buffer.write(generation.text);
+      await for (final tokenText in _isolate!.generate(tokens, maxTokens: 1024)) {
+        buffer.write(tokenText);
 
         setState(() {
-          _messages.last = AppChatMessage(
-            role: MessageRole.assistant,
-            content: buffer.toString(),
-            isStreaming: !generation.isEnd,
-          );
+          _messages.last = AppChatMessage(role: MessageRole.assistant, content: buffer.toString(), isStreaming: true);
         });
 
         _scrollToBottom();
-
-        if (generation.isEnd) break;
       }
 
       setState(() {
@@ -164,6 +162,21 @@ class _ChatPageState extends State<ChatPage> {
         _isLoading = false;
       });
     }
+  }
+
+  String _buildPrompt() {
+    final buffer = StringBuffer();
+
+    for (final message in _messages.where((m) => !m.isStreaming)) {
+      if (message.role == MessageRole.user) {
+        buffer.write('<|im_start|>user\n${message.content}<|im_end|>\n');
+      } else {
+        buffer.write('<|im_start|>assistant\n${message.content}<|im_end|>\n');
+      }
+    }
+
+    buffer.write('<|im_start|>assistant\n');
+    return buffer.toString();
   }
 
   void _scrollToBottom() {
@@ -181,7 +194,7 @@ class _ChatPageState extends State<ChatPage> {
   void _clearChat() {
     setState(() {
       _messages.clear();
-      _context?.reset();
+      _isolate?.reset();
     });
   }
 
