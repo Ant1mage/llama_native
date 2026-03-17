@@ -3,6 +3,8 @@ import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
 
 enum HardwareAcceleration { metal, cuda, vulkan, cpu }
 
+enum DeviceTier { flagship, midRange, lowEnd }
+
 class PlatformInfo {
   static String get currentPlatform {
     if (Platform.isMacOS) return 'macOS';
@@ -21,6 +23,35 @@ class PlatformInfo {
 
   static bool get supportsGpuOffload {
     return bindings.llama_supports_gpu_offload();
+  }
+
+  static bool get hasDiscreteGpu {
+    if (Platform.isWindows || Platform.isLinux) {
+      return _detectDiscreteGpu();
+    }
+    return false;
+  }
+
+  static bool _detectDiscreteGpu() {
+    return true;
+  }
+
+  static DeviceTier get deviceTier {
+    final mem = systemMemoryMB;
+
+    if (Platform.isAndroid) {
+      if (mem >= 12 * 1024) return DeviceTier.flagship;
+      if (mem >= 8 * 1024) return DeviceTier.midRange;
+      return DeviceTier.lowEnd;
+    }
+
+    if (Platform.isIOS) {
+      if (mem >= 8 * 1024) return DeviceTier.flagship;
+      if (mem >= 6 * 1024) return DeviceTier.midRange;
+      return DeviceTier.lowEnd;
+    }
+
+    return DeviceTier.flagship;
   }
 
   static int? _cachedSystemMemoryMB;
@@ -119,71 +150,67 @@ class PlatformInfo {
   }
 
   static int recommendedGpuLayers({int? modelSizeMB, int? modelLayers}) {
-    final hwAccel = detectHardwareAcceleration();
-
-    if (hwAccel == HardwareAcceleration.cpu) return 0;
-
-    final mem = availableMemoryMB;
-    final vram = availableVRAMMB;
-
-    double coeff;
-    switch (hwAccel) {
-      case HardwareAcceleration.metal:
-        coeff = 0.6;
-        break;
-      case HardwareAcceleration.vulkan:
-        coeff = 0.6;
-        break;
-      case HardwareAcceleration.cuda:
-        coeff = 0.85;
-        break;
-      case HardwareAcceleration.cpu:
+    if (Platform.isMacOS) {
+      if (isAppleSilicon) {
+        return -1;
+      } else {
         return 0;
-    }
-
-    int estimatedModelSize = modelSizeMB ?? (mem * 0.3).toInt();
-    final kvCacheMB = (recommendedContextLength() * 0.5).toInt();
-    int usableVram = ((vram * coeff - kvCacheMB)).toInt();
-    if (usableVram < 512) return 0;
-
-    if (modelLayers != null && modelLayers > 0) {
-      final memoryPerLayer = estimatedModelSize / modelLayers;
-      final layers = (usableVram / memoryPerLayer).floor();
-      return layers.clamp(0, modelLayers);
-    }
-
-    if (Platform.isMacOS && isAppleSilicon) {
-      if (mem >= 32 * 1024) return 99;
-      if (mem >= 24 * 1024) return 80;
-      if (mem >= 16 * 1024) return 60;
-      if (mem >= 12 * 1024) return 40;
-      if (mem >= 8 * 1024) return 30;
-      if (mem >= 6 * 1024) return 20;
-      return 10;
+      }
     }
 
     if (Platform.isIOS) {
-      if (mem >= 8 * 1024) return 40;
-      if (mem >= 6 * 1024) return 30;
-      if (mem >= 4 * 1024) return 20;
-      return 10;
+      return -1;
     }
 
-    if (usableVram >= 12 * 1024) return 99;
-    if (usableVram >= 8 * 1024) return 60;
-    if (usableVram >= 6 * 1024) return 40;
-    if (usableVram >= 4 * 1024) return 25;
-    if (usableVram >= 2 * 1024) return 10;
+    if (Platform.isAndroid) {
+      final tier = deviceTier;
+      if (tier == DeviceTier.lowEnd) {
+        return 0;
+      }
+      return -1;
+    }
+
+    if (Platform.isWindows) {
+      if (hasDiscreteGpu) {
+        return 99;
+      } else {
+        return 0;
+      }
+    }
+
+    if (Platform.isLinux) {
+      return 99;
+    }
+
     return 0;
   }
 
   static int recommendedContextLength({int? modelSizeMB}) {
-    final mem = availableMemoryMB;
+    if (Platform.isMacOS && isAppleSilicon) {
+      return 4096;
+    }
 
-    const int bytesPerToken = 2;
-    final int rawContext = (bytesPerToken * mem * 0.2).toInt();
+    if (Platform.isIOS) {
+      return 2048;
+    }
 
-    return rawContext.clamp(1024, 8192);
+    if (Platform.isAndroid) {
+      return 2048;
+    }
+
+    if (Platform.isWindows) {
+      if (hasDiscreteGpu) {
+        return 4096;
+      } else {
+        return 2048;
+      }
+    }
+
+    if (Platform.isLinux) {
+      return 4096;
+    }
+
+    return 2048;
   }
 
   static int recommendedThreads() {
@@ -192,14 +219,43 @@ class PlatformInfo {
   }
 
   static int recommendedBatchSize({bool useGpu = true}) {
-    final mem = systemMemoryMB;
+    if (Platform.isMacOS) {
+      if (isAppleSilicon) {
+        return 512;
+      } else {
+        return 256;
+      }
+    }
 
-    if (mem > 8 * 1024) return 512;
+    if (Platform.isIOS) {
+      return 256;
+    }
+
+    if (Platform.isAndroid) {
+      final tier = deviceTier;
+      if (tier == DeviceTier.lowEnd) {
+        return 128;
+      }
+      return 256;
+    }
+
+    if (Platform.isWindows) {
+      if (hasDiscreteGpu) {
+        return 512;
+      } else {
+        return 256;
+      }
+    }
+
+    if (Platform.isLinux) {
+      return 512;
+    }
+
     return 256;
   }
 
   static int recommendedUBatchSize() {
-    return recommendedBatchSize().clamp(64, 128);
+    return recommendedBatchSize();
   }
 
   static HardwareAcceleration detectHardwareAcceleration() {
@@ -219,10 +275,13 @@ class PlatformInfo {
     buffer.writeln('GPU Offload: ${supportsGpuOffload ? 'Supported' : 'Not Supported'}');
     buffer.writeln('Hardware Acceleration: ${detectHardwareAcceleration()}');
     if (Platform.isMacOS) buffer.writeln('Apple Silicon: $isAppleSilicon');
+    if (Platform.isAndroid) buffer.writeln('Device Tier: ${deviceTier.name}');
+    if (Platform.isWindows) buffer.writeln('Has Discrete GPU: $hasDiscreteGpu');
     buffer.writeln('--- Recommended Config ---');
     buffer.writeln('GPU Layers: ${recommendedGpuLayers()}');
     buffer.writeln('Context Length: ${recommendedContextLength()}');
     buffer.writeln('Batch Size: ${recommendedBatchSize()}');
+    buffer.writeln('UBatch Size: ${recommendedUBatchSize()}');
     buffer.writeln('Threads: ${recommendedThreads()}');
     return buffer.toString();
   }

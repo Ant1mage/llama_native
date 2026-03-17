@@ -59,7 +59,7 @@ class _ChatPageState extends State<ChatPage> {
             setState(() {
               _statusText = deviceInfo();
             });
-            _chat = LlamaChat(engine: _engine);
+            _chat = LlamaChat(engine: _engine, systemPrompt: "你叫Lumen, 是一个专业的智能助手, 每次回答不得超于4096字, **去掉思考过程**, 请严格按照这个指示");
             break;
           case LoadState.error:
             _statusText = '错误: ${_engine.error}';
