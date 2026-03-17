@@ -56,7 +56,9 @@ class _ChatPageState extends State<ChatPage> {
             _statusText = '正在加载模型...';
             break;
           case LoadState.ready:
-            _statusText = '模型已就绪';
+            setState(() {
+              _statusText = deviceInfo();
+            });
             _chat = LlamaChat(engine: _engine);
             break;
           case LoadState.error:
@@ -82,7 +84,9 @@ class _ChatPageState extends State<ChatPage> {
             _statusText = '正在创建上下文...';
             break;
           case LoadProgress.ready:
-            _statusText = '模型已就绪';
+            setState(() {
+              _statusText = deviceInfo();
+            });
             break;
         }
       });
@@ -96,6 +100,11 @@ class _ChatPageState extends State<ChatPage> {
     _chat?.dispose();
     _engine.dispose();
     super.dispose();
+  }
+
+  String _selectedModel = '';
+  String deviceInfo() {
+    return "Model: $_selectedModel \n ${PlatformInfo.getHardwareInfo()}";
   }
 
   Future<void> _pickModel() async {
@@ -112,6 +121,7 @@ class _ChatPageState extends State<ChatPage> {
       }
 
       if (result != null && result.files.single.path != null) {
+        _selectedModel = result.files.single.name;
         String destinationPath;
         if (Platform.isIOS) {
           String originalPath = result.files.single.path!;
