@@ -21,6 +21,7 @@ class LlamaEngine {
   String? get error => _error;
   String? get modelPath => _modelPath;
   bool get isReady => _state == LoadState.ready;
+  bool get isGenerating => _isolate?.isGenerating ?? false;
 
   Stream<LoadState> get onStateChange => _stateController.stream;
   Stream<LoadProgress> get onProgress => _progressController.stream;
@@ -96,6 +97,10 @@ class LlamaEngine {
       throw StateError('Engine not ready');
     }
     return _isolate!.generate(tokens, maxTokens: maxTokens);
+  }
+
+  void stop() {
+    _isolate?.stop();
   }
 
   Future<void> reset() async {

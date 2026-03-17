@@ -19,6 +19,8 @@ enum _MessageType {
   applyChatTemplateResult,
   generate,
   tokenGeneration,
+  stop,
+  stopped,
   error,
   done,
   reset,
@@ -62,9 +64,12 @@ class LlamaIsolate {
   final Logger _logger = Logger('LlamaIsolate');
   bool _isInitialized = false;
   bool _isModelLoaded = false;
+  bool _isGenerating = false;
+  SendPort? _currentGeneratePort;
 
   bool get isInitialized => _isInitialized;
   bool get isModelLoaded => _isModelLoaded;
+  bool get isGenerating => _isGenerating;
 
   Future<void> initialize() async {
     if (_isInitialized) return;
@@ -90,6 +95,7 @@ class LlamaIsolate {
   void _handleMessage(_IsolateMessage message) {
     switch (message.type) {
       case _MessageType.tokenGeneration:
+      case _MessageType.stopped:
       case _MessageType.error:
       case _MessageType.done:
         break;
@@ -183,8 +189,10 @@ class LlamaIsolate {
       throw StateError('Model not loaded');
     }
 
+    _isGenerating = true;
     final responsePort = ReceivePort();
     final controller = StreamController<TokenGeneration>();
+    _currentGeneratePort = responsePort.sendPort;
 
     _sendPort!.send(
       _IsolateMessage(_MessageType.generate, {
@@ -200,11 +208,16 @@ class LlamaIsolate {
           case _MessageType.tokenGeneration:
             controller.add(message.data as TokenGeneration);
             break;
+          case _MessageType.stopped:
           case _MessageType.done:
+            _isGenerating = false;
+            _currentGeneratePort = null;
             controller.close();
             responsePort.close();
             break;
           case _MessageType.error:
+            _isGenerating = false;
+            _currentGeneratePort = null;
             controller.addError(message.data);
             controller.close();
             responsePort.close();
@@ -216,6 +229,12 @@ class LlamaIsolate {
     });
 
     yield* controller.stream;
+  }
+
+  void stop() {
+    if (_isGenerating && _sendPort != null) {
+      _sendPort!.send(_IsolateMessage(_MessageType.stop, null));
+    }
   }
 
   Future<void> reset() async {
@@ -263,6 +282,8 @@ class LlamaIsolate {
     _subscription = null;
     _isInitialized = false;
     _isModelLoaded = false;
+    _isGenerating = false;
+    _currentGeneratePort = null;
 
     _logger.info('LlamaIsolate disposed');
   }
@@ -276,6 +297,8 @@ class LlamaIsolate {
     LlamaModel? model;
     LlamaContext? context;
     LlamaTokenizer? chatTokenizer;
+    bool shouldStop = false;
+    SendPort? currentGeneratePort;
 
     receivePort.listen((message) {
       if (message is _IsolateMessage) {
@@ -290,8 +313,16 @@ class LlamaIsolate {
 
           case _MessageType.generate:
             if (context != null) {
-              _handleGenerate(message.data, context!, logger);
+              shouldStop = false;
+              currentGeneratePort = message.data['responsePort'] as SendPort;
+              _handleGenerateAsync(message.data, context!, () => shouldStop, logger);
+              currentGeneratePort = null;
             }
+            break;
+
+          case _MessageType.stop:
+            shouldStop = true;
+            logger.debug('Stop signal received');
             break;
 
           case _MessageType.tokenize:
@@ -363,7 +394,12 @@ class LlamaIsolate {
     }
   }
 
-  static void _handleGenerate(Map<String, dynamic> data, LlamaContext context, Logger logger) {
+  static Future<void> _handleGenerateAsync(
+    Map<String, dynamic> data,
+    LlamaContext context,
+    bool Function() shouldStop,
+    Logger logger,
+  ) async {
     final tokens = data['tokens'] as List<int>;
     final maxTokens = data['maxTokens'] as int;
     final responsePort = data['responsePort'] as SendPort;
@@ -374,6 +410,12 @@ class LlamaIsolate {
       context.decode(tokens);
 
       for (var i = 0; i < maxTokens; i++) {
+        if (shouldStop()) {
+          logger.debug('Generation stopped by user');
+          responsePort.send(_IsolateMessage(_MessageType.stopped, null));
+          return;
+        }
+
         final token = context.sample();
         final isEnd = context.isEos(token);
         final tokenText = context.detokenizeOne(token);
@@ -385,6 +427,8 @@ class LlamaIsolate {
         if (isEnd) break;
 
         context.decodeOne(token);
+
+        await Future.delayed(Duration.zero);
       }
 
       responsePort.send(_IsolateMessage(_MessageType.done, null));

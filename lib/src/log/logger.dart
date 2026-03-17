@@ -6,7 +6,7 @@ class Logger {
   final logger.Logger _logger;
 
   /// 创建日志记录器
-  Logger(this._tag, {logger.Level level = logger.Level.info})
+  Logger(this._tag, {logger.Level level = logger.Level.debug})
       : _logger = logger.Logger(
           printer: logger.PrettyPrinter(
             methodCount: 0,

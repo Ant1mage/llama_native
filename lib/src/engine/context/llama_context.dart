@@ -137,6 +137,29 @@ class LlamaContext with Disposable {
     if (tokens.isEmpty) return;
 
     final nTokens = tokens.length;
+    final batchSize = _config.nBatch;
+
+    if (nTokens <= batchSize) {
+      _decodeBatch(tokens);
+    } else {
+      for (var offset = 0; offset < nTokens; offset += batchSize) {
+        final end = (offset + batchSize < nTokens) ? offset + batchSize : nTokens;
+        final batch = tokens.sublist(offset, end);
+        _decodeBatch(batch);
+      }
+    }
+  }
+
+  void _decodeBatch(List<int> tokens) {
+    if (tokens.isEmpty) return;
+
+    final nTokens = tokens.length;
+
+    if (_nPast + nTokens > _config.nCtx) {
+      _logger.warning('KV cache would overflow: _nPast=$_nPast + nTokens=$nTokens > nCtx=${_config.nCtx}');
+      _autoTruncateCache(nTokens);
+    }
+
     final batch = bindings.llama_batch_init(nTokens, 0, 1);
 
     try {
@@ -161,6 +184,31 @@ class LlamaContext with Disposable {
       _kvCache?.addProcessed(nTokens);
     } finally {
       bindings.llama_batch_free(batch);
+    }
+  }
+
+  void _autoTruncateCache(int neededTokens) {
+    final targetLength = _config.nCtx - neededTokens - (_config.nCtx ~/ 8);
+    if (targetLength <= 0) {
+      throw LlamaException.kvCache('Context too small for $neededTokens tokens');
+    }
+
+    _logger.info('Auto-truncating KV cache from $_nPast to $targetLength tokens');
+
+    final mem = bindings.llama_get_memory(_ctxPtr!);
+    final removeCount = _nPast - targetLength;
+
+    if (removeCount > 0) {
+      final removed = bindings.llama_memory_seq_rm(mem, 0, 0, removeCount);
+      if (removed) {
+        bindings.llama_memory_seq_add(mem, 0, removeCount, _nPast, -removeCount);
+        _nPast -= removeCount;
+        _logger.info('Truncated $removeCount tokens, nPast now: $_nPast');
+      } else {
+        _logger.warning('Failed to truncate, resetting cache');
+        bindings.llama_memory_clear(mem, true);
+        _nPast = 0;
+      }
     }
   }
 

@@ -72,6 +72,14 @@ await for (final text in chat.sendMessage('你好')) {
   print(text);
 }
 
+// 停止生成
+chat.stop();
+
+// 检查是否正在生成
+if (chat.isGenerating) {
+  chat.stop();
+}
+
 // 发送消息（等待完成）
 final reply = await chat.sendMessageAndWait('介绍一下自己');
 print(reply);
@@ -124,6 +132,7 @@ class LlamaEngine {
   String? get error;
   String? get modelPath;
   bool get isReady;
+  bool get isGenerating;
 
   // 事件流
   Stream<LoadState> get onStateChange;
@@ -134,6 +143,7 @@ class LlamaEngine {
   Future<List<int>> tokenize(String text, {bool addBos = false});
   Future<String> applyChatTemplate(List<Map<String, String>> messages);
   Stream<TokenGeneration> generate(List<int> tokens, {int maxTokens = 1024});
+  void stop();
   Future<void> reset();
   Future<void> dispose();
 }
@@ -154,8 +164,10 @@ class LlamaChat {
   List<LlamaChatMessage> get history;
   Stream<LlamaChatMessage> get onMessage;
   bool get isReady;
+  bool get isGenerating;
 
   void clearHistory();
+  void stop();
   Stream<String> sendMessage(String userMessage);
   Future<String> sendMessageAndWait(String userMessage);
   Future<void> reset();

@@ -102,25 +102,6 @@ class LlamaTemplate {
     }
   }
 
-  /// 根据模型名称检测模板类型
-  LlamaTemplateType detectType(String modelName) {
-    final name = modelName.toLowerCase();
-
-    if (name.contains('llama-3') || name.contains('llama3')) {
-      return LlamaTemplateType.llama3;
-    } else if (name.contains('qwen')) {
-      return LlamaTemplateType.qwen;
-    } else if (name.contains('mistral')) {
-      return LlamaTemplateType.mistral;
-    } else if (name.contains('chatml')) {
-      return LlamaTemplateType.chatml;
-    } else if (name.contains('alpaca')) {
-      return LlamaTemplateType.alpaca;
-    }
-
-    return LlamaTemplateType.unknown;
-  }
-
   /// 转换为原生 llama_chat_message 数组
   Pointer<bindings.llama_chat_message> _toNativeChatMessages(List<LlamaChatMessage> messages) {
     final chatMessages = calloc<bindings.llama_chat_message>(messages.length);

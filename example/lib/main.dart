@@ -100,16 +100,12 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _pickModel() async {
     try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.any, // 强制允许点击所有文件
-        allowMultiple: false,
-      );
+      FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.any, allowMultiple: false);
 
       if (result != null) {
         String path = result.files.single.path!;
         if (path.endsWith('.gguf')) {
           print("成功选中模型: $path");
-          // 传给你的 C++ Wrapper
         } else {
           print("请选择正确的 GGUF 文件");
         }
@@ -120,12 +116,10 @@ class _ChatPageState extends State<ChatPage> {
         if (Platform.isIOS) {
           String originalPath = result.files.single.path!;
 
-          // 1. 获取 App 自己的私有目录
           final docsDir = await getApplicationDocumentsDirectory();
           final fileName = result.files.single.name;
           destinationPath = "${docsDir.path}/$fileName";
 
-          // 2. 如果文件不在私有目录，拷贝一份（或者如果已存在则跳过）
           final sourceFile = File(originalPath);
           final destinationFile = File(destinationPath);
 
@@ -134,7 +128,6 @@ class _ChatPageState extends State<ChatPage> {
             await sourceFile.copy(destinationPath);
           }
 
-          // 3. 将稳定、有权限的沙盒路径传给 C++
           print("加载模型: $destinationPath");
         } else {
           destinationPath = result.files.single.path!;
@@ -192,6 +185,19 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  void _stopGeneration() {
+    _chat?.stop();
+    setState(() {
+      if (_messages.isNotEmpty && _messages.last.isStreaming) {
+        _messages.last = _DisplayMessage(
+          role: _messages.last.role,
+          content: _messages.last.content,
+          isStreaming: false,
+        );
+      }
+    });
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -210,6 +216,8 @@ class _ChatPageState extends State<ChatPage> {
       _chat?.reset();
     });
   }
+
+  bool get _isGenerating => _messages.isNotEmpty && _messages.last.isStreaming;
 
   @override
   Widget build(BuildContext context) {
@@ -286,22 +294,21 @@ class _ChatPageState extends State<ChatPage> {
                       maxLines: null,
                       textInputAction: TextInputAction.send,
                       onSubmitted: (_) => _sendMessage(),
-                      enabled: _engine.isReady,
+                      enabled: _engine.isReady && !_isGenerating,
                     ),
                   ),
                   const SizedBox(width: 8),
-                  IconButton.filled(
-                    icon: _messages.isNotEmpty && _messages.last.isStreaming
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                          )
-                        : const Icon(Icons.send),
-                    onPressed: _engine.isReady && (_messages.isEmpty || !_messages.last.isStreaming)
-                        ? _sendMessage
-                        : null,
-                  ),
+                  if (_isGenerating)
+                    IconButton.filled(
+                      icon: const Icon(Icons.stop),
+                      style: IconButton.styleFrom(
+                        backgroundColor: Theme.of(context).colorScheme.error,
+                        foregroundColor: Theme.of(context).colorScheme.onError,
+                      ),
+                      onPressed: _stopGeneration,
+                    )
+                  else
+                    IconButton.filled(icon: const Icon(Icons.send), onPressed: _engine.isReady ? _sendMessage : null),
                 ],
               ),
             ),

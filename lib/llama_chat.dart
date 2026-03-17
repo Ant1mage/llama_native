@@ -21,9 +21,14 @@ class LlamaChat {
   List<LlamaChatMessage> get history => List.unmodifiable(_history);
   Stream<LlamaChatMessage> get onMessage => _messageController.stream;
   bool get isReady => _engine.isReady;
+  bool get isGenerating => _engine.isGenerating;
 
   void clearHistory() {
     _history.clear();
+  }
+
+  void stop() {
+    _engine.stop();
   }
 
   Stream<String> sendMessage(String userMessage) async* {
