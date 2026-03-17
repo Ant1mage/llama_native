@@ -98,7 +98,7 @@ class LlamaBackend {
       try {
         bindings.llama_backend_init();
       } catch (e) {
-        throw LlamaException.backendInit('Failed to initialize llama backend', platform: currentPlatform);
+        throw LlamaException.backend('Failed to initialize llama backend', platform: currentPlatform);
       }
 
       _initialized = true;
@@ -108,7 +108,7 @@ class LlamaBackend {
       if (e is LlamaException) {
         rethrow;
       }
-      throw LlamaException.backendInit(e.toString(), platform: currentPlatform);
+      throw LlamaException.backend(e.toString(), platform: currentPlatform);
     }
   }
 

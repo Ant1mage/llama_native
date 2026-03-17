@@ -179,9 +179,9 @@ class LlamaTemplate {
     final buffer = StringBuffer();
 
     for (final msg in messages) {
-      if (msg.role == LlamaChatMessageRole.user) {
+      if (msg.role == LlamaMessageRole.user) {
         buffer.write('[INST] ${msg.content} [/INST]');
-      } else if (msg.role == LlamaChatMessageRole.assistant) {
+      } else if (msg.role == LlamaMessageRole.assistant) {
         buffer.write(' ${msg.content}');
       } else {
         buffer.write('${msg.content}\n');
@@ -214,9 +214,9 @@ class LlamaTemplate {
     );
 
     for (final msg in messages) {
-      if (msg.role == LlamaChatMessageRole.user) {
+      if (msg.role == LlamaMessageRole.user) {
         buffer.write('### Instruction:\n${msg.content}\n\n');
-      } else if (msg.role == LlamaChatMessageRole.assistant) {
+      } else if (msg.role == LlamaMessageRole.assistant) {
         buffer.write('### Response:\n${msg.content}\n\n');
       } else {
         buffer.write('${msg.content}\n\n');

@@ -119,7 +119,7 @@ class SessionState implements Disposable {
       session._serializedData = data;
       return session;
     } catch (e) {
-      throw LlamaException.sessionState('Failed to deserialize: $e');
+      throw LlamaException.session('Failed to deserialize: $e');
     }
   }
 

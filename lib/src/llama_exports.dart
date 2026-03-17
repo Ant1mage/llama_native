@@ -5,6 +5,6 @@ library llama_exports;
 
 // High-level API
 export 'package:llama_native/llama_engine.dart' show LlamaEngine, LoadState, LoadProgress;
-export 'package:llama_native/llama_chat.dart' show LlamaChat, LlamaChatMessage, LlamaChatMessageRole;
+export 'package:llama_native/llama_chat.dart' show LlamaChat, LlamaChatMessage, LlamaMessageRole;
 export 'package:llama_native/src/engine/context/token_generation.dart' show TokenGeneration;
 export 'package:llama_native/src/engine/exceptions/llama_exceptions.dart' show LlamaException, LlamaErrorType;

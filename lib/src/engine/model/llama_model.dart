@@ -1,6 +1,5 @@
 import 'dart:ffi';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:convert';
 import 'package:ffi/ffi.dart';
 import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
@@ -132,7 +131,7 @@ class LlamaModel with Disposable {
 
       if (ptr == nullptr) {
         _logger.error('Failed to load model: ${_config.modelPath}');
-        throw LlamaException.modelLoad('Failed to load model from file', filePath: _config.modelPath);
+        throw LlamaException.model('Failed to load model from file', filePath: _config.modelPath);
       }
 
       _modelPtr = ptr;

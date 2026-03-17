@@ -2,9 +2,8 @@ import 'dart:async';
 
 import 'package:llama_native/llama_engine.dart';
 import 'package:llama_native/llama_chat_message.dart';
-import 'package:llama_native/src/engine/context/token_generation.dart';
 
-export 'package:llama_native/llama_chat_message.dart' show LlamaChatMessage, LlamaChatMessageRole;
+export 'package:llama_native/llama_chat_message.dart' show LlamaChatMessage, LlamaMessageRole;
 
 class LlamaChat {
   final LlamaEngine _engine;

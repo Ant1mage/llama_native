@@ -418,10 +418,10 @@ class LlamaIsolate {
         final content = m['content']!;
         return LlamaChatMessage(
           role: role == 'system'
-              ? LlamaChatMessageRole.system
+              ? LlamaMessageRole.system
               : role == 'user'
-              ? LlamaChatMessageRole.user
-              : LlamaChatMessageRole.assistant,
+              ? LlamaMessageRole.user
+              : LlamaMessageRole.assistant,
           content: content,
         );
       }).toList();

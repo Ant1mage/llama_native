@@ -156,8 +156,8 @@ class _ChatPageState extends State<ChatPage> {
     _controller.clear();
 
     setState(() {
-      _messages.add(_DisplayMessage(role: LlamaChatMessageRole.user, content: text));
-      _messages.add(_DisplayMessage(role: LlamaChatMessageRole.assistant, content: '', isStreaming: true));
+      _messages.add(_DisplayMessage(role: LlamaMessageRole.user, content: text));
+      _messages.add(_DisplayMessage(role: LlamaMessageRole.assistant, content: '', isStreaming: true));
     });
 
     _scrollToBottom();
@@ -169,7 +169,7 @@ class _ChatPageState extends State<ChatPage> {
 
         setState(() {
           _messages.last = _DisplayMessage(
-            role: LlamaChatMessageRole.assistant,
+            role: LlamaMessageRole.assistant,
             content: buffer.toString(),
             isStreaming: true,
           );
@@ -180,18 +180,14 @@ class _ChatPageState extends State<ChatPage> {
 
       setState(() {
         _messages.last = _DisplayMessage(
-          role: LlamaChatMessageRole.assistant,
+          role: LlamaMessageRole.assistant,
           content: buffer.toString(),
           isStreaming: false,
         );
       });
     } catch (e) {
       setState(() {
-        _messages.last = _DisplayMessage(
-          role: LlamaChatMessageRole.assistant,
-          content: '生成回复时出错: $e',
-          isStreaming: false,
-        );
+        _messages.last = _DisplayMessage(role: LlamaMessageRole.assistant, content: '生成回复时出错: $e', isStreaming: false);
       });
     }
   }
@@ -323,7 +319,7 @@ class _MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isUser = message.role == LlamaChatMessageRole.user;
+    final isUser = message.role == LlamaMessageRole.user;
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -364,7 +360,7 @@ class _MessageBubble extends StatelessWidget {
 }
 
 class _DisplayMessage {
-  final LlamaChatMessageRole role;
+  final LlamaMessageRole role;
   final String content;
   final bool isStreaming;
 

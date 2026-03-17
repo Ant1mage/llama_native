@@ -6,11 +6,10 @@ Flutter FFI 插件，提供 llama.cpp 的全平台 Dart 封装，支持本地大
 
 - 🚀 **全平台支持**: Android, iOS, macOS, Linux, Windows
 - 📦 **Native Assets**: 自动下载预编译库，无需本地编译
-- 💬 **对话支持**: ChatTokenizer 和多种 Chat Template
+- 💬 **简洁 API**: LlamaEngine + LlamaChat 两层封装
 - ⚡ **流式生成**: 实时 token 输出，不阻塞 UI
-- 🎯 **Grammar 约束**: JSON Schema 转 GBNF，结构化输出
-- 🔧 **Function Calling**: 支持工具调用和函数执行
-- 🗂️ **KV Cache 管理**: 会话状态保存与恢复
+- 🎯 **TokenGeneration**: 结构化生成结果，包含 token ID、文本、结束状态
+- 🔧 **统一异常**: LlamaException + LlamaErrorType 枚举
 
 ## 快速开始
 
@@ -26,150 +25,199 @@ dependencies:
 ```dart
 import 'package:llama_native/llama_native.dart';
 
-// 初始化后端
-final backend = LlamaBackend.instance;
-await backend.initialize();
+// 创建引擎
+final engine = LlamaEngine();
 
 // 加载模型
-final model = LlamaModel.load(
-  LlamaModelConfig(modelPath: 'path/to/model.gguf')
-);
-
-// 智能配置（根据硬件自动优化）
-final config = InferenceConfig.defaults();
-
-// 或针对特定模型优化
-final config = InferenceConfig.forModel(
-  modelSizeMB: 4000,  // 模型大小 MB
-  modelLayers: 32,    // 模型层数
-);
-
-// 或手动指定参数
-final config = InferenceConfig.defaults(
-  nCtx: 8192,
-  nGpuLayers: 40,
-  sampling: SamplingConfig(temperature: 0.7, topP: 0.9),
-);
-
-// 创建上下文
-final context = LlamaContext.create(model, config);
-
-// 流式生成
-final tokens = model.tokenize('你好', addBos: true);
-final stream = context.generateStream(tokens, maxTokens: 256);
-await for (final result in stream) {
-  print(result.text);
+final success = await engine.load('path/to/model.gguf');
+if (!success) {
+  print('加载失败: ${engine.error}');
+  return;
 }
 
-// 清理资源
-context.dispose();
-model.dispose();
-backend.dispose();
+// 监听加载进度
+engine.onProgress.listen((progress) {
+  print('进度: $progress');
+});
+
+// 生成文本
+final tokens = await engine.tokenize('你好', addBos: true);
+await for (final gen in engine.generate(tokens, maxTokens: 256)) {
+  print('Token ${gen.token}: ${gen.text}');
+  if (gen.isEnd) break;
+}
+
+// 清理
+await engine.dispose();
 ```
 
-### 3. 查看硬件信息
+### 3. 对话示例
 
 ```dart
-// 打印当前硬件信息
-print(PlatformInfo.getHardwareInfo());
+import 'package:llama_native/llama_native.dart';
 
-// 获取推荐配置
-print('推荐 GPU 层数: ${PlatformInfo.recommendedGpuLayers()}');
-print('推荐上下文长度: ${PlatformInfo.recommendedContextLength()}');
-print('推荐批次大小: ${PlatformInfo.recommendedBatchSize()}');
-print('系统内存: ${PlatformInfo.systemMemoryMB}MB');
-print('可用显存: ${PlatformInfo.availableVRAMMB}MB');
-```
+// 创建引擎
+final engine = LlamaEngine();
+await engine.load('path/to/model.gguf');
 
-### 4. 对话示例
-
-```dart
-// 初始化 ChatTokenizer
-final tokenizer = ChatTokenizer(
-  model: model,
-  templateType: ChatTemplateType.chatml,
+// 创建对话
+final chat = LlamaChat(
+  engine: engine,
+  systemPrompt: '你是一个 AI 助手',
+  maxTokens: 1024,
 );
 
-// 构建对话
-final messages = [
-  const ChatMessage.system('你是一个 AI 助手'),
-  const ChatMessage.user('你好'),
-];
-
-// 应用模板并 tokenize
-final prompt = tokenizer.applyTemplate(messages);
-final tokens = model.tokenize(prompt, addBos: false);
-
-// 生成回复
-final stream = context.generateStream(tokens, maxTokens: 512);
-final buffer = StringBuffer();
-await for (final result in stream) {
-  buffer.write(result.text);
-  if (result.isEnd) break;
+// 发送消息（流式）
+await for (final text in chat.sendMessage('你好')) {
+  print(text);
 }
-print(buffer.toString());
+
+// 发送消息（等待完成）
+final reply = await chat.sendMessageAndWait('介绍一下自己');
+print(reply);
+
+// 查看历史
+for (final msg in chat.history) {
+  print('${msg.role}: ${msg.content}');
+}
+
+// 清理
+chat.dispose();
+await engine.dispose();
 ```
 
-### 5. JSON 结构化输出
+### 4. 监听状态
 
 ```dart
-// 定义 JSON Schema
-final schema = {
-  'type': 'object',
-  'properties': {
-    'name': {'type': 'string'},
-    'age': {'type': 'integer'},
-  },
-  'required': ['name', 'age'],
-};
+// 监听引擎状态
+engine.onStateChange.listen((state) {
+  switch (state) {
+    case LoadState.idle:
+      print('空闲');
+    case LoadState.initializing:
+      print('初始化中');
+    case LoadState.loading:
+      print('加载中');
+    case LoadState.ready:
+      print('就绪');
+    case LoadState.error:
+      print('错误: ${engine.error}');
+  }
+});
 
-// 创建 Grammar
-final grammar = Grammar.fromJsonSchema(schema);
-
-// 使用 Grammar 生成
-final stream = context.generateStream(tokens, maxTokens: 256, grammar: grammar);
+// 监听加载进度
+engine.onProgress.listen((progress) {
+  print('进度: $progress');
+});
 ```
 
-### 6. Function Calling
+## API 参考
+
+### LlamaEngine
+
+核心推理引擎，管理模型加载和文本生成。
 
 ```dart
-// 定义函数
-final functions = [
-  FunctionDefinition(
-    name: 'get_weather',
-    description: '获取指定城市的天气',
-    parameters: {
-      'type': 'object',
-      'properties': {
-        'city': {'type': 'string', 'description': '城市名称'},
-      },
-      'required': ['city'],
-    },
-  ),
-];
+class LlamaEngine {
+  // 状态
+  LoadState get state;
+  String? get error;
+  String? get modelPath;
+  bool get isReady;
 
-// 创建 Function Manager
-final functionManager = FunctionManager(functions: functions);
+  // 事件流
+  Stream<LoadState> get onStateChange;
+  Stream<LoadProgress> get onProgress;
 
-// 生成并解析函数调用
-final grammar = functionManager.createGrammar();
-final stream = context.generateStream(tokens, grammar: grammar);
+  // 方法
+  Future<bool> load(String modelPath);
+  Future<List<int>> tokenize(String text, {bool addBos = false});
+  Future<String> applyChatTemplate(List<Map<String, String>> messages);
+  Stream<TokenGeneration> generate(List<int> tokens, {int maxTokens = 1024});
+  Future<void> reset();
+  Future<void> dispose();
+}
 ```
 
-## 核心模块
+### LlamaChat
 
-| 模块 | 说明 |
-|------|------|
-| `LlamaBackend` | 后端初始化，硬件加速检测 |
-| `LlamaModel` | 模型加载，tokenize/detokenize |
-| `LlamaContext` | 推理引擎，流式生成 |
-| `InferenceConfig` | 推理参数配置 |
-| `ChatTokenizer` | Chat Template 处理 |
-| `KVCacheManager` | KV Cache 管理与快照 |
-| `SessionManager` | 会话状态管理 |
-| `SamplingConfig` | 采样策略配置 |
-| `Grammar` | GBNF 语法约束 |
-| `FunctionManager` | Function Calling 管理 |
+高级对话接口，自动管理对话历史和模板。
+
+```dart
+class LlamaChat {
+  LlamaChat({
+    required LlamaEngine engine,
+    String systemPrompt = '',
+    int maxTokens = 1024,
+  });
+
+  List<LlamaChatMessage> get history;
+  Stream<LlamaChatMessage> get onMessage;
+  bool get isReady;
+
+  void clearHistory();
+  Stream<String> sendMessage(String userMessage);
+  Future<String> sendMessageAndWait(String userMessage);
+  Future<void> reset();
+  void dispose();
+}
+```
+
+### LlamaChatMessage
+
+对话消息模型。
+
+```dart
+enum LlamaMessageRole { system, user, assistant }
+
+class LlamaChatMessage {
+  final LlamaMessageRole role;
+  final String content;
+
+  const LlamaChatMessage({required role, required content});
+  const LlamaChatMessage.system(String content);
+  const LlamaChatMessage.user(String content);
+  const LlamaChatMessage.assistant(String content);
+
+  Map<String, String> toMap();
+}
+```
+
+### TokenGeneration
+
+生成结果，包含完整的 token 信息。
+
+```dart
+class TokenGeneration {
+  final int token;      // Token ID
+  final String text;    // Token 文本
+  final bool isEnd;     // 是否为结束 token
+}
+```
+
+### LlamaException
+
+统一异常处理。
+
+```dart
+enum LlamaErrorType {
+  model, tokenize, context,
+  session, inference, backend, kvCache,
+}
+
+class LlamaException implements Exception {
+  final LlamaErrorType type;
+  final String message;
+  final Map<String, dynamic>? details;
+
+  // 工厂方法
+  factory LlamaException.model(String message, {String? filePath});
+  factory LlamaException.tokenize(String message, {String? text});
+  factory LlamaException.context(String message);
+  factory LlamaException.inference(String message, {int? tokenIndex});
+  // ...
+}
+```
 
 ## 构建说明
 
@@ -211,36 +259,24 @@ flutter run -d macos
 
 ```
 lib/
-├── llama_native.dart          # 主入口
-├── llama_native_bindings.dart # FFI 绑定
+├── llama_engine.dart          # 引擎 API
+├── llama_chat.dart            # 对话 API
+├── llama_chat_message.dart    # 消息模型
 └── src/
-    ├── backend/               # 后端管理
-    ├── model/                 # 模型加载
-    ├── context/               # 推理上下文
-    ├── tokenizer/             # Tokenizer
-    ├── cache/                 # KV Cache
-    ├── session/               # 会话管理
-    ├── sampling/              # 采样配置
-    ├── grammar/               # Grammar 约束
-    ├── function/              # Function Calling
+    ├── engine/
+    │   ├── backend/           # 后端管理
+    │   ├── model/             # 模型加载
+    │   ├── context/           # 推理上下文
+    │   ├── tokenizer/         # Tokenizer
+    │   ├── cache/             # KV Cache
+    │   ├── sampling/          # 采样配置
+    │   └── exceptions/        # 异常定义
+    ├── llama_isolate.dart     # Isolate 封装
     └── utils/                 # 工具类
 
 hook/
 └── build.dart                 # Native Assets 构建脚本
-
-.github/workflows/
-└── build-dylib.yml            # CI/CD 预编译库构建
 ```
-
-## 支持的 Chat Template
-
-| Template | 模型 |
-|----------|------|
-| `chatml` | Qwen, Yi, 等 |
-| `llama3` | Llama 3.x |
-| `qwen` | Qwen 系列 |
-| `mistral` | Mistral, Mixtral |
-| `alpaca` | Alpaca 系列 |
 
 ## 注意事项
 

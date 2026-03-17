@@ -1,5 +1,4 @@
 import 'dart:ffi';
-import 'dart:typed_data';
 import 'dart:convert';
 
 import 'package:ffi/ffi.dart';
@@ -9,13 +8,11 @@ import 'package:llama_native/src/engine/backend/llama_backend.dart';
 import 'package:llama_native/src/engine/backend/llama_backend_config.dart';
 import 'package:llama_native/src/engine/model/llama_model.dart';
 import 'package:llama_native/src/engine/context/inference_config.dart';
-import 'package:llama_native/src/engine/context/token_generation.dart';
 import 'package:llama_native/src/engine/sampling/sampling_config.dart';
 import 'package:llama_native/src/engine/cache/kv_cache_manager.dart';
 import 'package:llama_native/src/log/logger.dart';
 import 'package:llama_native/src/utils/disposable.dart';
 import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
-import 'package:llama_native/src/engine/grammar/grammar.dart';
 
 /// 推理执行引擎
 class LlamaContext with Disposable {
@@ -57,7 +54,7 @@ class LlamaContext with Disposable {
 
     final ptr = bindings.llama_init_from_model(_model.handle, ctxParams);
     if (ptr == nullptr) {
-      throw LlamaException.contextInit('llama_init_from_model returned null');
+      throw LlamaException.context('llama_init_from_model returned null');
     }
     _ctxPtr = ptr;
 
@@ -73,7 +70,7 @@ class LlamaContext with Disposable {
     final chain = bindings.llama_sampler_chain_init(chainParams);
 
     if (chain == nullptr) {
-      throw LlamaException.contextInit('Failed to init sampler chain');
+      throw LlamaException.context('Failed to init sampler chain');
     }
 
     if (sampling.penaltyRepeat != 1.0 || sampling.frequencyPenalty != 0.0 || sampling.presencePenalty != 0.0) {
@@ -123,6 +120,7 @@ class LlamaContext with Disposable {
 
   int get nPast => _nPast;
 
+  @override
   bool get isDisposed => _disposed;
 
   LlamaModel get model => _model;
@@ -154,7 +152,7 @@ class LlamaContext with Disposable {
 
       final ret = bindings.llama_decode(_ctxPtr!, batch);
       if (ret < 0) {
-        throw LlamaException.contextInit('llama_decode failed: $ret');
+        throw LlamaException.context('llama_decode failed: $ret');
       } else if (ret > 0) {
         throw LlamaException.kvCache('KV cache full, cannot decode batch');
       }
