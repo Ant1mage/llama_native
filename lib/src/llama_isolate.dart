@@ -71,7 +71,6 @@ class LlamaIsolate {
   bool _isInitialized = false;
   bool _isModelLoaded = false;
   bool _isGenerating = false;
-  SendPort? _currentGeneratePort;
 
   bool get isInitialized => _isInitialized;
   bool get isModelLoaded => _isModelLoaded;
@@ -198,7 +197,6 @@ class LlamaIsolate {
     _isGenerating = true;
     final responsePort = ReceivePort();
     final controller = StreamController<TokenGeneration>();
-    _currentGeneratePort = responsePort.sendPort;
 
     _sendPort!.send(
       _IsolateMessage(_MessageType.generate, {
@@ -217,13 +215,11 @@ class LlamaIsolate {
           case _MessageType.stopped:
           case _MessageType.done:
             _isGenerating = false;
-            _currentGeneratePort = null;
             controller.close();
             responsePort.close();
             break;
           case _MessageType.error:
             _isGenerating = false;
-            _currentGeneratePort = null;
             controller.addError(message.data);
             controller.close();
             responsePort.close();
@@ -352,7 +348,6 @@ class LlamaIsolate {
     _isInitialized = false;
     _isModelLoaded = false;
     _isGenerating = false;
-    _currentGeneratePort = null;
 
     _logger.info('LlamaIsolate disposed');
   }
@@ -367,7 +362,6 @@ class LlamaIsolate {
     LlamaContext? context;
     LlamaTokenizer? chatTokenizer;
     bool shouldStop = false;
-    SendPort? currentGeneratePort;
 
     receivePort.listen((message) {
       if (message is _IsolateMessage) {
@@ -383,9 +377,7 @@ class LlamaIsolate {
           case _MessageType.generate:
             if (context != null) {
               shouldStop = false;
-              currentGeneratePort = message.data['responsePort'] as SendPort;
               _handleGenerateAsync(message.data, context!, () => shouldStop, logger);
-              currentGeneratePort = null;
             }
             break;
 

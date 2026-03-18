@@ -19,9 +19,9 @@ EXTERNAL SOURCES:
     :path: Flutter/ephemeral/.symlinks/plugins/llama_native/macos
 
 SPEC CHECKSUMS:
-  file_picker: 7584aae6fa07a041af2b36a2655122d42f578c1a
+  file_picker: e716a70a9fe5fd9e09ebc922d7541464289443af
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
-  llama_native: 6441b1fbfd5bfc44795c9c34e8ddadea695f50b0
+  llama_native: 7e8f38d4cd7e0d4a3d0a893f6bb82fa8710faba7
 
 PODFILE CHECKSUM: 54d867c82ac51cbd61b565781b9fada492027009
 

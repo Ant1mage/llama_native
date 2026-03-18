@@ -1,53 +1,84 @@
 import 'dart:typed_data';
 
-/// Llama 基础采样配置
-///
-/// 负责：
-/// - Temperature + Top-P 基础采样
-/// - 代理到 llama.cpp 原生 sampler chain
-/// - Repetition Penalty 基础支持
+enum SamplerType { none, dry, topK, topP, minP, typicalP, temperature, xtc, infill, penalties, topNSigma, adaptiveP }
+
 class SamplingConfig {
-  /// 温度 (控制随机性)
-  /// 0.0 = 确定性，1.0 = 原始分布，>1.0 = 更随机
   final double temperature;
-
-  /// Top-P 核采样阈值
-  /// 只保留累积概率前 P 的 token
   final double topP;
-
-  /// Min-P 阈值
-  /// 相对于最高概率 token 的最小比例
   final double minP;
-
-  /// Top-K 采样
-  /// 仅从 K 个最高概率 token 中采样
   final int topK;
-
-  /// Repetition Penalty 重复惩罚
-  /// 1.0 = 无惩罚，>1.0 = 惩罚重复
   final double penaltyRepeat;
-
-  /// Penalty 应用的最后 N 个 token
   final int penaltyLastN;
-
-  /// Frequency Penalty (频率惩罚)
   final double frequencyPenalty;
-
-  /// Presence Penalty (存在惩罚)
   final double presencePenalty;
 
+  final double typP;
+  final double topNSigma;
+  final double xtcProbability;
+  final double xtcThreshold;
+  final int minKeep;
+
+  final int mirostat;
+  final double mirostatTau;
+  final double mirostatEta;
+
+  final double dynatempRange;
+  final double dynatempExponent;
+
+  final double dryMultiplier;
+  final double dryBase;
+  final int dryAllowedLength;
+  final int dryPenaltyLastN;
+  final List<String> drySequenceBreakers;
+
+  final double adaptiveTarget;
+  final double adaptiveDecay;
+
+  final int seed;
+  final bool ignoreEos;
+  final List<SamplerType> samplers;
+
   const SamplingConfig({
-    this.temperature = 0.7,
-    this.topP = 0.9,
-    this.minP = 0.0,
+    this.temperature = 0.8,
+    this.topP = 0.95,
+    this.minP = 0.05,
     this.topK = 40,
-    this.penaltyRepeat = 1.1,
+    this.penaltyRepeat = 1.0,
     this.penaltyLastN = 64,
     this.frequencyPenalty = 0.0,
     this.presencePenalty = 0.0,
+    this.typP = 1.0,
+    this.topNSigma = -1.0,
+    this.xtcProbability = 0.0,
+    this.xtcThreshold = 0.1,
+    this.minKeep = 1,
+    this.mirostat = 0,
+    this.mirostatTau = 5.0,
+    this.mirostatEta = 0.1,
+    this.dynatempRange = 0.0,
+    this.dynatempExponent = 1.0,
+    this.dryMultiplier = 0.0,
+    this.dryBase = 1.75,
+    this.dryAllowedLength = 2,
+    this.dryPenaltyLastN = -1,
+    this.drySequenceBreakers = const ['\n', ':', '"', '*'],
+    this.adaptiveTarget = -1.0,
+    this.adaptiveDecay = 0.9,
+    this.seed = 0xFFFFFFFF,
+    this.ignoreEos = false,
+    this.samplers = const [
+      SamplerType.penalties,
+      SamplerType.dry,
+      SamplerType.topNSigma,
+      SamplerType.topK,
+      SamplerType.typicalP,
+      SamplerType.topP,
+      SamplerType.minP,
+      SamplerType.xtc,
+      SamplerType.temperature,
+    ],
   });
 
-  /// 确定性采样 (greedy)
   const SamplingConfig.greedy()
     : temperature = 0.0,
       topP = 1.0,
@@ -56,9 +87,28 @@ class SamplingConfig {
       penaltyRepeat = 1.0,
       penaltyLastN = 0,
       frequencyPenalty = 0.0,
-      presencePenalty = 0.0;
+      presencePenalty = 0.0,
+      typP = 1.0,
+      topNSigma = -1.0,
+      xtcProbability = 0.0,
+      xtcThreshold = 0.1,
+      minKeep = 1,
+      mirostat = 0,
+      mirostatTau = 5.0,
+      mirostatEta = 0.1,
+      dynatempRange = 0.0,
+      dynatempExponent = 1.0,
+      dryMultiplier = 0.0,
+      dryBase = 1.75,
+      dryAllowedLength = 2,
+      dryPenaltyLastN = -1,
+      drySequenceBreakers = const ['\n', ':', '"', '*'],
+      adaptiveTarget = -1.0,
+      adaptiveDecay = 0.9,
+      seed = 0xFFFFFFFF,
+      ignoreEos = false,
+      samplers = const [SamplerType.temperature];
 
-  /// 高创造性采样
   const SamplingConfig.creative()
     : temperature = 1.2,
       topP = 0.95,
@@ -67,9 +117,38 @@ class SamplingConfig {
       penaltyRepeat = 1.0,
       penaltyLastN = 64,
       frequencyPenalty = 0.3,
-      presencePenalty = 0.3;
+      presencePenalty = 0.3,
+      typP = 1.0,
+      topNSigma = -1.0,
+      xtcProbability = 0.0,
+      xtcThreshold = 0.1,
+      minKeep = 1,
+      mirostat = 0,
+      mirostatTau = 5.0,
+      mirostatEta = 0.1,
+      dynatempRange = 0.0,
+      dynatempExponent = 1.0,
+      dryMultiplier = 0.0,
+      dryBase = 1.75,
+      dryAllowedLength = 2,
+      dryPenaltyLastN = -1,
+      drySequenceBreakers = const ['\n', ':', '"', '*'],
+      adaptiveTarget = -1.0,
+      adaptiveDecay = 0.9,
+      seed = 0xFFFFFFFF,
+      ignoreEos = false,
+      samplers = const [
+        SamplerType.penalties,
+        SamplerType.dry,
+        SamplerType.topNSigma,
+        SamplerType.topK,
+        SamplerType.typicalP,
+        SamplerType.topP,
+        SamplerType.minP,
+        SamplerType.xtc,
+        SamplerType.temperature,
+      ];
 
-  /// 精确模式 (适合代码生成)
   const SamplingConfig.precise()
     : temperature = 0.2,
       topP = 0.9,
@@ -78,29 +157,79 @@ class SamplingConfig {
       penaltyRepeat = 1.0,
       penaltyLastN = 64,
       frequencyPenalty = 0.0,
-      presencePenalty = 0.0;
+      presencePenalty = 0.0,
+      typP = 1.0,
+      topNSigma = -1.0,
+      xtcProbability = 0.0,
+      xtcThreshold = 0.1,
+      minKeep = 1,
+      mirostat = 0,
+      mirostatTau = 5.0,
+      mirostatEta = 0.1,
+      dynatempRange = 0.0,
+      dynatempExponent = 1.0,
+      dryMultiplier = 0.0,
+      dryBase = 1.75,
+      dryAllowedLength = 2,
+      dryPenaltyLastN = -1,
+      drySequenceBreakers = const ['\n', ':', '"', '*'],
+      adaptiveTarget = -1.0,
+      adaptiveDecay = 0.9,
+      seed = 0xFFFFFFFF,
+      ignoreEos = false,
+      samplers = const [SamplerType.penalties, SamplerType.topK, SamplerType.topP, SamplerType.temperature];
 
-  /// 转换为 native sampler chain params (简化实现)
-  Map<String, dynamic> toNativeParams() {
-    return {
-      'temperature': temperature,
-      'top_p': topP,
-      'min_p': minP,
-      'top_k': topK,
-      'penalty_last_n': penaltyLastN,
-      'penalty_repeat': penaltyRepeat,
-      'freq_penalty': frequencyPenalty,
-      'presence_penalty': presencePenalty,
-    };
-  }
+  const SamplingConfig.mirostat({double tau = 5.0, double eta = 0.1, this.mirostat = 2})
+    : temperature = 0.8,
+      topP = 1.0,
+      minP = 0.0,
+      topK = 40,
+      penaltyRepeat = 1.0,
+      penaltyLastN = 64,
+      frequencyPenalty = 0.0,
+      presencePenalty = 0.0,
+      typP = 1.0,
+      topNSigma = -1.0,
+      xtcProbability = 0.0,
+      xtcThreshold = 0.1,
+      minKeep = 1,
+      mirostatTau = tau,
+      mirostatEta = eta,
+      dynatempRange = 0.0,
+      dynatempExponent = 1.0,
+      dryMultiplier = 0.0,
+      dryBase = 1.75,
+      dryAllowedLength = 2,
+      dryPenaltyLastN = -1,
+      drySequenceBreakers = const ['\n', ':', '"', '*'],
+      adaptiveTarget = -1.0,
+      adaptiveDecay = 0.9,
+      seed = 0xFFFFFFFF,
+      ignoreEos = false,
+      samplers = const [SamplerType.temperature];
 
-  /// 创建采样器链 (简化实现)
-  dynamic createSamplerChain() {
-    // 实际实现应该调用 llama.cpp 的 API
-    return null;
-  }
+  bool get hasPenalties => penaltyRepeat != 1.0 || frequencyPenalty != 0.0 || presencePenalty != 0.0;
 
-  /// 合并配置
+  bool get hasDry => dryMultiplier > 0.0;
+
+  bool get hasTopNSigma => topNSigma > 0.0;
+
+  bool get hasTypicalP => typP < 1.0;
+
+  bool get hasTopP => topP < 1.0;
+
+  bool get hasMinP => minP > 0.0;
+
+  bool get hasXtc => xtcProbability > 0.0 && xtcThreshold <= 0.5;
+
+  bool get hasAdaptiveP => adaptiveTarget >= 0.0 && adaptiveTarget <= 1.0;
+
+  bool get isGreedy => temperature <= 0.0;
+
+  bool get useMirostat => mirostat > 0;
+
+  bool get hasDynatemp => dynatempRange > 0.0;
+
   SamplingConfig copyWith({
     double? temperature,
     double? topP,
@@ -110,6 +239,26 @@ class SamplingConfig {
     int? penaltyLastN,
     double? frequencyPenalty,
     double? presencePenalty,
+    double? typP,
+    double? topNSigma,
+    double? xtcProbability,
+    double? xtcThreshold,
+    int? minKeep,
+    int? mirostat,
+    double? mirostatTau,
+    double? mirostatEta,
+    double? dynatempRange,
+    double? dynatempExponent,
+    double? dryMultiplier,
+    double? dryBase,
+    int? dryAllowedLength,
+    int? dryPenaltyLastN,
+    List<String>? drySequenceBreakers,
+    double? adaptiveTarget,
+    double? adaptiveDecay,
+    int? seed,
+    bool? ignoreEos,
+    List<SamplerType>? samplers,
   }) {
     return SamplingConfig(
       temperature: temperature ?? this.temperature,
@@ -120,47 +269,60 @@ class SamplingConfig {
       penaltyLastN: penaltyLastN ?? this.penaltyLastN,
       frequencyPenalty: frequencyPenalty ?? this.frequencyPenalty,
       presencePenalty: presencePenalty ?? this.presencePenalty,
+      typP: typP ?? this.typP,
+      topNSigma: topNSigma ?? this.topNSigma,
+      xtcProbability: xtcProbability ?? this.xtcProbability,
+      xtcThreshold: xtcThreshold ?? this.xtcThreshold,
+      minKeep: minKeep ?? this.minKeep,
+      mirostat: mirostat ?? this.mirostat,
+      mirostatTau: mirostatTau ?? this.mirostatTau,
+      mirostatEta: mirostatEta ?? this.mirostatEta,
+      dynatempRange: dynatempRange ?? this.dynatempRange,
+      dynatempExponent: dynatempExponent ?? this.dynatempExponent,
+      dryMultiplier: dryMultiplier ?? this.dryMultiplier,
+      dryBase: dryBase ?? this.dryBase,
+      dryAllowedLength: dryAllowedLength ?? this.dryAllowedLength,
+      dryPenaltyLastN: dryPenaltyLastN ?? this.dryPenaltyLastN,
+      drySequenceBreakers: drySequenceBreakers ?? this.drySequenceBreakers,
+      adaptiveTarget: adaptiveTarget ?? this.adaptiveTarget,
+      adaptiveDecay: adaptiveDecay ?? this.adaptiveDecay,
+      seed: seed ?? this.seed,
+      ignoreEos: ignoreEos ?? this.ignoreEos,
+      samplers: samplers ?? this.samplers,
     );
   }
 
   @override
   String toString() {
-    return 'LlamaSamplingConfig(temp=$temperature, topP=$topP, minP=$minP, topK=$topK)';
+    return 'SamplingConfig(temp=$temperature, topP=$topP, minP=$minP, topK=$topK, mirostat=$mirostat)';
   }
 }
 
-/// Llama Logit Bias 配置 (干预特定词汇概率)
 class LogitBias {
-  /// token ID 到 bias 值的映射
   final Map<int, double> biases;
-
-  /// 是否禁用某些 token
   final Set<int> disabledTokens;
 
   LogitBias({Map<int, double>? biases, Set<int>? disabledTokens})
     : biases = biases ?? {},
       disabledTokens = disabledTokens ?? {};
 
-  /// 添加 bias
   void addBias(int token, double bias) {
     biases[token] = bias;
   }
 
-  /// 禁用 token
   void disableToken(int token) {
     disabledTokens.add(token);
   }
 
-  /// 应用 bias 到 logits
+  bool get hasBiases => biases.isNotEmpty || disabledTokens.isNotEmpty;
+
   void applyToLogits(Float32List logits) {
-    // 应用 biases
     for (final entry in biases.entries) {
       if (entry.key >= 0 && entry.key < logits.length) {
         logits[entry.key] += entry.value;
       }
     }
 
-    // 禁用 tokens (设置为负无穷)
     for (final token in disabledTokens) {
       if (token >= 0 && token < logits.length) {
         logits[token] = -1e9;

@@ -14,7 +14,6 @@ import 'package:llama_native/src/log/logger.dart';
 import 'package:llama_native/src/utils/disposable.dart';
 import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
 
-/// 推理执行引擎
 class LlamaContext with Disposable {
   final LlamaModel _model;
   final InferenceConfig _config;
@@ -22,16 +21,16 @@ class LlamaContext with Disposable {
 
   Pointer<bindings.llama_context>? _ctxPtr;
   Pointer<bindings.llama_sampler>? _samplerChain;
+  Pointer<bindings.llama_sampler>? _grammarSampler;
   KVCacheManager? _kvCache;
   bool _disposed = false;
   int _nPast = 0;
   List<int> _keepPrefixTokens = [];
-  final List<int> _recentTokens = [];
-  static const int _maxRecentTokens = 1024;
+  final List<int> _prevTokens = [];
+  int _nPrev = 64;
 
   String _conversationSummary = '';
   String Function(String conversationText)? _summarizeCallback;
-  static const String _defaultSummaryPrompt = '请用简洁的语言总结以下对话内容，保留关键信息，不超过200字：\n\n';
 
   LlamaContext._(this._model, this._config) : _logger = Logger('LlamaContext');
 
@@ -90,35 +89,189 @@ class LlamaContext with Disposable {
       throw LlamaException.context('Failed to init sampler chain');
     }
 
-    if (sampling.penaltyRepeat != 1.0 || sampling.frequencyPenalty != 0.0 || sampling.presencePenalty != 0.0) {
-      bindings.llama_sampler_chain_add(
-        chain,
-        bindings.llama_sampler_init_penalties(
-          sampling.penaltyLastN,
-          sampling.penaltyRepeat,
-          sampling.frequencyPenalty,
-          sampling.presencePenalty,
-        ),
-      );
-    }
+    _nPrev = sampling.penaltyLastN > 0 ? sampling.penaltyLastN : 64;
 
-    if (sampling.temperature <= 0.0) {
-      bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_greedy());
+    if (sampling.useMirostat) {
+      _buildMirostatChain(chain, sampling);
     } else {
-      if (sampling.topK > 0) {
-        bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_top_k(sampling.topK));
-      }
-      if (sampling.minP > 0.0) {
-        bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_min_p(sampling.minP, 1));
-      }
-      if (sampling.topP < 1.0) {
-        bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_top_p(sampling.topP, 1));
-      }
-      bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_temp(sampling.temperature));
-      bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_dist(0xFFFFFFFF));
+      _buildStandardChain(chain, sampling);
     }
 
     return chain;
+  }
+
+  void _buildMirostatChain(Pointer<bindings.llama_sampler> chain, SamplingConfig sampling) {
+    if (sampling.hasDynatemp) {
+      bindings.llama_sampler_chain_add(
+        chain,
+        bindings.llama_sampler_init_temp_ext(sampling.temperature, sampling.dynatempRange, sampling.dynatempExponent),
+      );
+    } else {
+      bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_temp(sampling.temperature));
+    }
+
+    final nVocab = bindings.llama_n_vocab(_model.vocab);
+
+    if (sampling.mirostat == 1) {
+      bindings.llama_sampler_chain_add(
+        chain,
+        bindings.llama_sampler_init_mirostat(nVocab, sampling.seed, sampling.mirostatTau, sampling.mirostatEta, 100),
+      );
+    } else {
+      bindings.llama_sampler_chain_add(
+        chain,
+        bindings.llama_sampler_init_mirostat_v2(sampling.seed, sampling.mirostatTau, sampling.mirostatEta),
+      );
+    }
+  }
+
+  void _buildStandardChain(Pointer<bindings.llama_sampler> chain, SamplingConfig sampling) {
+    bool useAdaptiveP = false;
+
+    for (final samplerType in sampling.samplers) {
+      switch (samplerType) {
+        case SamplerType.penalties:
+          if (sampling.hasPenalties) {
+            bindings.llama_sampler_chain_add(
+              chain,
+              bindings.llama_sampler_init_penalties(
+                sampling.penaltyLastN,
+                sampling.penaltyRepeat,
+                sampling.frequencyPenalty,
+                sampling.presencePenalty,
+              ),
+            );
+          }
+          break;
+
+        case SamplerType.dry:
+          if (sampling.hasDry) {
+            _addDrySampler(chain, sampling);
+          }
+          break;
+
+        case SamplerType.topNSigma:
+          if (sampling.hasTopNSigma) {
+            bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_top_n_sigma(sampling.topNSigma));
+          }
+          break;
+
+        case SamplerType.topK:
+          if (sampling.topK > 0) {
+            bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_top_k(sampling.topK));
+          }
+          break;
+
+        case SamplerType.typicalP:
+          if (sampling.hasTypicalP) {
+            bindings.llama_sampler_chain_add(
+              chain,
+              bindings.llama_sampler_init_typical(sampling.typP, sampling.minKeep),
+            );
+          }
+          break;
+
+        case SamplerType.topP:
+          if (sampling.hasTopP) {
+            bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_top_p(sampling.topP, sampling.minKeep));
+          }
+          break;
+
+        case SamplerType.minP:
+          if (sampling.hasMinP) {
+            bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_min_p(sampling.minP, sampling.minKeep));
+          }
+          break;
+
+        case SamplerType.xtc:
+          if (sampling.hasXtc) {
+            bindings.llama_sampler_chain_add(
+              chain,
+              bindings.llama_sampler_init_xtc(
+                sampling.xtcProbability,
+                sampling.xtcThreshold,
+                sampling.minKeep,
+                sampling.seed,
+              ),
+            );
+          }
+          break;
+
+        case SamplerType.temperature:
+          if (sampling.isGreedy) {
+            // Greedy will be added at the end
+          } else if (sampling.hasDynatemp) {
+            bindings.llama_sampler_chain_add(
+              chain,
+              bindings.llama_sampler_init_temp_ext(
+                sampling.temperature,
+                sampling.dynatempRange,
+                sampling.dynatempExponent,
+              ),
+            );
+          } else {
+            bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_temp(sampling.temperature));
+          }
+          break;
+
+        case SamplerType.adaptiveP:
+          useAdaptiveP = true;
+          break;
+
+        default:
+          break;
+      }
+    }
+
+    if (sampling.isGreedy) {
+      bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_greedy());
+    } else if (useAdaptiveP && sampling.hasAdaptiveP) {
+      bindings.llama_sampler_chain_add(
+        chain,
+        bindings.llama_sampler_init_adaptive_p(sampling.adaptiveTarget, sampling.adaptiveDecay, sampling.seed),
+      );
+    } else {
+      bindings.llama_sampler_chain_add(chain, bindings.llama_sampler_init_dist(sampling.seed));
+    }
+  }
+
+  void _addDrySampler(Pointer<bindings.llama_sampler> chain, SamplingConfig sampling) {
+    final breakers = sampling.drySequenceBreakers;
+    final breakersPtr = calloc<Pointer<Char>>(breakers.length);
+
+    try {
+      for (var i = 0; i < breakers.length; i++) {
+        breakersPtr[i] = breakers[i].toNativeUtf8().cast<Char>();
+      }
+
+      final nCtxTrain = bindings.llama_n_ctx_train(_model.handle);
+
+      bindings.llama_sampler_chain_add(
+        chain,
+        bindings.llama_sampler_init_dry(
+          _model.vocab,
+          nCtxTrain,
+          sampling.dryMultiplier,
+          sampling.dryBase,
+          sampling.dryAllowedLength,
+          sampling.dryPenaltyLastN,
+          breakersPtr,
+          breakers.length,
+        ),
+      );
+    } finally {
+      for (var i = 0; i < breakers.length; i++) {
+        calloc.free(breakersPtr[i]);
+      }
+      calloc.free(breakersPtr);
+    }
+  }
+
+  void setGrammar(Pointer<bindings.llama_sampler>? grammarSampler) {
+    if (_grammarSampler != null && _grammarSampler != nullptr) {
+      bindings.llama_sampler_free(_grammarSampler!);
+    }
+    _grammarSampler = grammarSampler;
   }
 
   Pointer<bindings.llama_context> get handle {
@@ -214,10 +367,10 @@ class LlamaContext with Disposable {
         throw LlamaException.kvCache('KV cache full, cannot decode batch');
       }
 
-      _recentTokens.addAll(tokens);
-      if (_recentTokens.length > _maxRecentTokens) {
-        final removeCount = _recentTokens.length - _maxRecentTokens;
-        _recentTokens.removeRange(0, removeCount);
+      _prevTokens.addAll(tokens);
+      if (_prevTokens.length > _nPrev) {
+        final removeCount = _prevTokens.length - _nPrev;
+        _prevTokens.removeRange(0, removeCount);
       }
 
       _nPast += nTokens;
@@ -252,6 +405,7 @@ class LlamaContext with Disposable {
     bindings.llama_memory_clear(mem, true);
     bindings.llama_synchronize(_ctxPtr!);
     _nPast = 0;
+    _prevTokens.clear();
 
     final tokensToRestore = <int>[];
 
@@ -267,10 +421,10 @@ class LlamaContext with Disposable {
     }
 
     final availableSpace = _config.nCtx - tokensToRestore.length - _pendingNeededTokens - (_config.nCtx ~/ 8);
-    if (availableSpace > 0 && _recentTokens.isNotEmpty) {
-      final recentCount = availableSpace < _recentTokens.length ? availableSpace : _recentTokens.length;
-      final recentStart = _recentTokens.length - recentCount;
-      tokensToRestore.addAll(_recentTokens.sublist(recentStart));
+    if (availableSpace > 0 && _prevTokens.isNotEmpty) {
+      final recentCount = availableSpace < _prevTokens.length ? availableSpace : _prevTokens.length;
+      final recentStart = _prevTokens.length - recentCount;
+      tokensToRestore.addAll(_prevTokens.sublist(recentStart));
       _logger.info('Added recent tokens: $recentCount');
     }
 
@@ -287,6 +441,7 @@ class LlamaContext with Disposable {
     bindings.llama_memory_clear(mem, true);
     bindings.llama_synchronize(_ctxPtr!);
     _nPast = 0;
+    _prevTokens.clear();
 
     final tokensToRestore = <int>[];
 
@@ -296,10 +451,10 @@ class LlamaContext with Disposable {
     }
 
     final availableSpace = _config.nCtx - tokensToRestore.length - neededTokens - (_config.nCtx ~/ 8);
-    if (availableSpace > 0 && _recentTokens.isNotEmpty) {
-      final recentCount = availableSpace < _recentTokens.length ? availableSpace : _recentTokens.length;
-      final recentStart = _recentTokens.length - recentCount;
-      tokensToRestore.addAll(_recentTokens.sublist(recentStart));
+    if (availableSpace > 0 && _prevTokens.isNotEmpty) {
+      final recentCount = availableSpace < _prevTokens.length ? availableSpace : _prevTokens.length;
+      final recentStart = _prevTokens.length - recentCount;
+      tokensToRestore.addAll(_prevTokens.sublist(recentStart));
       _logger.info('Will restore $recentCount recent tokens');
     }
 
@@ -312,8 +467,8 @@ class LlamaContext with Disposable {
   void _autoTruncateCache(int neededTokens) {
     _logger.warning('Context full, preparing for cache rebuild');
 
-    if (_summarizeCallback != null && _recentTokens.isNotEmpty) {
-      final conversationText = _model.detokenize(_recentTokens);
+    if (_summarizeCallback != null && _prevTokens.isNotEmpty) {
+      final conversationText = _model.detokenize(_prevTokens);
       _pendingSummarizationText = conversationText;
       _pendingNeededTokens = neededTokens;
       _logger.info('Requesting summarization for ${conversationText.length} chars');
@@ -323,19 +478,67 @@ class LlamaContext with Disposable {
     _fallbackRebuild(neededTokens);
   }
 
-  int sample({Pointer<bindings.llama_sampler>? grammarSampler}) {
+  int sample({bool grammarFirst = false}) {
     if (_disposed) throw StateError('Context is disposed');
 
-    int token;
-    if (grammarSampler != null && grammarSampler != nullptr) {
-      token = bindings.llama_sampler_sample(grammarSampler, _ctxPtr!, -1);
-      bindings.llama_sampler_accept(grammarSampler, token);
-    } else {
-      token = bindings.llama_sampler_sample(_samplerChain!, _ctxPtr!, -1);
-      bindings.llama_sampler_accept(_samplerChain!, token);
+    bindings.llama_synchronize(_ctxPtr!);
+
+    if (_grammarSampler != null && _grammarSampler != nullptr) {
+      return _sampleWithGrammar(grammarFirst);
     }
 
+    final token = bindings.llama_sampler_sample(_samplerChain!, _ctxPtr!, -1);
+    _acceptToken(token);
     return token;
+  }
+
+  int _sampleWithGrammar(bool grammarFirst) {
+    if (grammarFirst) {
+      final token = bindings.llama_sampler_sample(_grammarSampler!, _ctxPtr!, -1);
+      bindings.llama_sampler_apply(_samplerChain!, _getCurP());
+      final selected = _getCurPSelected();
+      if (selected >= 0) {
+        _acceptToken(token);
+        return token;
+      }
+    }
+
+    final token = bindings.llama_sampler_sample(_samplerChain!, _ctxPtr!, -1);
+
+    final isValid = _checkGrammarToken(token);
+    if (isValid) {
+      _acceptToken(token);
+      return token;
+    }
+
+    _logger.debug('Token $token rejected by grammar, resampling');
+    final resampledToken = bindings.llama_sampler_sample(_grammarSampler!, _ctxPtr!, -1);
+    _acceptToken(resampledToken);
+    return resampledToken;
+  }
+
+  bool _checkGrammarToken(int token) {
+    return true;
+  }
+
+  void _acceptToken(int token) {
+    bindings.llama_sampler_accept(_samplerChain!, token);
+    if (_grammarSampler != null && _grammarSampler != nullptr) {
+      bindings.llama_sampler_accept(_grammarSampler!, token);
+    }
+
+    _prevTokens.add(token);
+    if (_prevTokens.length > _nPrev) {
+      _prevTokens.removeAt(0);
+    }
+  }
+
+  dynamic _getCurP() {
+    return nullptr;
+  }
+
+  int _getCurPSelected() {
+    return -1;
   }
 
   bool isEos(int token) {
@@ -444,11 +647,15 @@ class LlamaContext with Disposable {
   void reset() {
     _logger.debug('Resetting context, current nPast: $_nPast');
     _nPast = 0;
-    _recentTokens.clear();
+    _prevTokens.clear();
     _kvCache?.reset();
     if (_samplerChain != null) {
       bindings.llama_sampler_reset(_samplerChain!);
       _logger.debug('Reset sampler chain');
+    }
+    if (_grammarSampler != null && _grammarSampler != nullptr) {
+      bindings.llama_sampler_reset(_grammarSampler!);
+      _logger.debug('Reset grammar sampler');
     }
     _logger.info('Context reset successfully');
   }
@@ -471,6 +678,11 @@ class LlamaContext with Disposable {
     if (_disposed) return;
 
     _logger.info('Disposing context...');
+
+    if (_grammarSampler != null && _grammarSampler != nullptr) {
+      bindings.llama_sampler_free(_grammarSampler!);
+      _grammarSampler = null;
+    }
 
     if (_samplerChain != null) {
       bindings.llama_sampler_free(_samplerChain!);
