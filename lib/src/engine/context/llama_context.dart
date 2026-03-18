@@ -8,6 +8,7 @@ import 'package:llama_native/src/engine/backend/llama_backend.dart';
 import 'package:llama_native/src/engine/backend/llama_backend_config.dart';
 import 'package:llama_native/src/engine/model/llama_model.dart';
 import 'package:llama_native/src/engine/context/inference_config.dart';
+import 'package:llama_native/src/engine/context/performance_metrics.dart';
 import 'package:llama_native/src/engine/sampling/sampling_config.dart';
 import 'package:llama_native/src/engine/cache/kv_cache_manager.dart';
 import 'package:llama_native/src/log/logger.dart';
@@ -665,6 +666,37 @@ class LlamaContext with Disposable {
   bool get needsTruncation => remainingContext < _config.nBatch;
 
   int get keepPrefix => _kvCache?.keepPrefix ?? 0;
+
+  PerformanceMetrics get performanceMetrics {
+    if (_ctxPtr == null || _disposed) {
+      return PerformanceMetrics.empty();
+    }
+
+    final perfContext = bindings.llama_perf_context(_ctxPtr!);
+    final perfSampler = _samplerChain != null ? bindings.llama_perf_sampler(_samplerChain!) : null;
+
+    return PerformanceMetrics(
+      tStartMs: perfContext.t_start_ms,
+      tLoadMs: perfContext.t_load_ms,
+      tPromptEvalMs: perfContext.t_p_eval_ms,
+      tEvalMs: perfContext.t_eval_ms,
+      nPromptEval: perfContext.n_p_eval,
+      nEval: perfContext.n_eval,
+      nReused: perfContext.n_reused,
+      tSampleMs: perfSampler?.t_sample_ms ?? 0,
+      nSample: perfSampler?.n_sample ?? 0,
+    );
+  }
+
+  void resetPerformanceMetrics() {
+    if (_ctxPtr != null && _ctxPtr != nullptr) {
+      bindings.llama_perf_context_reset(_ctxPtr!);
+    }
+    if (_samplerChain != null && _samplerChain != nullptr) {
+      bindings.llama_perf_sampler_reset(_samplerChain!);
+    }
+    _logger.debug('Performance metrics reset');
+  }
 
   Pointer<bindings.llama_context> get ctxPtr {
     if (_ctxPtr == null || _disposed) {
