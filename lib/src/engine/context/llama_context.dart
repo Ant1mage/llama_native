@@ -362,16 +362,6 @@ class LlamaContext with Disposable {
   }
 
   int _sampleWithGrammar(bool grammarFirst) {
-    if (grammarFirst) {
-      final token = bindings.llama_sampler_sample(_grammarSampler!, _ctxPtr!, -1);
-      bindings.llama_sampler_apply(_samplerChain!, _getCurP());
-      final selected = _getCurPSelected();
-      if (selected >= 0) {
-        _acceptToken(token);
-        return token;
-      }
-    }
-
     final token = bindings.llama_sampler_sample(_samplerChain!, _ctxPtr!, -1);
 
     final isValid = _checkGrammarToken(token);
@@ -400,14 +390,6 @@ class LlamaContext with Disposable {
     if (_prevTokens.length > _nPrev) {
       _prevTokens.removeAt(0);
     }
-  }
-
-  dynamic _getCurP() {
-    return nullptr;
-  }
-
-  int _getCurPSelected() {
-    return -1;
   }
 
   bool isEos(int token) {
@@ -468,42 +450,6 @@ class LlamaContext with Disposable {
       _nPast = pos + 1;
     } finally {
       bindings.llama_batch_free(batch);
-    }
-  }
-
-  void processTokens(List<int> tokens) {
-    if (tokens.isEmpty) return;
-
-    final nTokens = tokens.length;
-    final startPos = _kvCache?.allocatePositions(nTokens) ?? _nPast;
-    _logger.debug('Processing $nTokens tokens at position $startPos');
-
-    final tokenArray = calloc<Int32>(nTokens);
-    try {
-      for (var i = 0; i < nTokens; i++) {
-        tokenArray.elementAt(i).value = tokens[i];
-      }
-
-      final batch = bindings.llama_batch_get_one(tokenArray, nTokens);
-      _logger.debug('Created batch with $nTokens tokens');
-
-      final ret = bindings.llama_decode(handle, batch);
-      if (ret < 0) {
-        _logger.error('llama_decode failed with code $ret');
-        throw LlamaException.inference('Failed to decode batch: $ret');
-      } else if (ret > 0) {
-        _logger.warning('llama_decode returned $ret (no KV slot available)');
-        throw LlamaException.kvCache('KV cache full, cannot decode batch');
-      }
-
-      _nPast = startPos + nTokens;
-      _logger.debug('Processed $nTokens tokens, nPast now: $_nPast');
-    } catch (e) {
-      _logger.error('Error processing tokens: $e');
-      rethrow;
-    } finally {
-      calloc.free(tokenArray);
-      _logger.debug('Freed token array');
     }
   }
 

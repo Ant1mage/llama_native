@@ -104,6 +104,14 @@ class LlamaEngine {
     _isolate?.stop();
   }
 
+  Future<void> stopAsync() async {
+    _isolate?.stop();
+    await Future.doWhile(() async {
+      await Future.delayed(const Duration(milliseconds: 50));
+      return _isolate?.isGenerating ?? false;
+    });
+  }
+
   Future<void> reset() async {
     if (_isolate != null && _isolate!.isModelLoaded) {
       await _isolate!.reset();

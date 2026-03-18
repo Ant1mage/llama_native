@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:llama_native/llama_engine.dart';
 import 'package:llama_native/llama_chat_message.dart';
+import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
 
 export 'package:llama_native/llama_chat_message.dart' show LlamaChatMessage, LlamaMessageRole;
 
@@ -62,10 +63,17 @@ class LlamaChat {
     final tokens = await _engine.tokenize(prompt, addBos: false);
 
     final buffer = StringBuffer();
-    await for (final generation in _engine.generate(tokens, maxTokens: _maxTokens)) {
-      buffer.write(generation.text);
-      yield generation.text;
-      if (generation.isEnd) break;
+    try {
+      await for (final generation in _engine.generate(tokens, maxTokens: _maxTokens)) {
+        buffer.write(generation.text);
+        yield generation.text;
+        if (generation.isEnd) break;
+      }
+    } on LlamaException catch (e) {
+      if (e.type == LlamaErrorType.kvCache) {
+        await _engine.reset();
+      }
+      rethrow;
     }
 
     final assistantMessage = buffer.toString();

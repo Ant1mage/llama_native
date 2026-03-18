@@ -1,4 +1,5 @@
 import 'dart:ffi';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
@@ -51,16 +52,7 @@ class EmbeddingResult {
     }
 
     if (normA == 0 || normB == 0) return 0;
-    return dotProduct / (sqrt(normA) * sqrt(normB));
-  }
-
-  double sqrt(double x) {
-    if (x <= 0) return 0;
-    double guess = x / 2;
-    for (int i = 0; i < 20; i++) {
-      guess = (guess + x / guess) / 2;
-    }
-    return guess;
+    return dotProduct / (math.sqrt(normA) * math.sqrt(normB));
   }
 
   Float32List toFloat32() => Float32List.fromList(embedding);
@@ -209,22 +201,13 @@ class LlamaEmbeddings with Disposable {
     for (final val in embedding) {
       norm += val * val;
     }
-    norm = sqrt(norm);
+    norm = math.sqrt(norm);
 
     if (norm > 0) {
       for (int i = 0; i < embedding.length; i++) {
         embedding[i] /= norm;
       }
     }
-  }
-
-  double sqrt(double x) {
-    if (x <= 0) return 0;
-    double guess = x / 2;
-    for (int i = 0; i < 20; i++) {
-      guess = (guess + x / guess) / 2;
-    }
-    return guess;
   }
 
   int get embeddingSize => _model.getMetadata().embeddingDimension;

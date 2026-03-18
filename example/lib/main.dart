@@ -72,7 +72,6 @@ class _ChatPageState extends State<ChatPage> {
             _chat = LlamaChat(
               engine: _engine,
               systemPrompt: "你叫Lumen, 是一个专业的智能助手, 每次回答不得超于4096字, **去掉思考过程**, 请严格按照这个指示",
-              summarizeCallback: _generateSummary,
             );
             break;
           case LoadState.error:
@@ -332,20 +331,6 @@ $conversationText
       body: Column(
         children: [
           _buildStatusPanel(),
-          if (_chat?.conversationSummary.isNotEmpty == true)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(8),
-              color: Theme.of(context).colorScheme.primaryContainer,
-              child: Text(
-                '📝 对话摘要: ${_chat!.conversationSummary}',
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.onPrimaryContainer),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
           _buildPerformancePanel(),
           _buildEmbeddingPanel(),
           Expanded(

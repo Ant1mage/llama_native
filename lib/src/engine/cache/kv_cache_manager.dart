@@ -23,12 +23,17 @@ class KVCacheManager with Disposable {
 
   int get _moeBufferSlots => (_nCtx * _moeBufferPercent).toInt();
   int get _safeCapacity => _nCtx - _moeBufferSlots;
-  int get _usedCells {
-    if (_ctx == null) return _logicalPos;
+
+  int get physicalUsedCells {
+    if (_ctx == null) return 0;
     final mem = bindings.llama_get_memory(_ctx!);
     final maxPos = bindings.llama_memory_seq_pos_max(mem, 0);
-    return maxPos >= 0 ? maxPos + 1 : _logicalPos;
+    return maxPos >= 0 ? maxPos + 1 : 0;
   }
+
+  int get logicalPosition => _logicalPos;
+
+  int get _usedCells => physicalUsedCells;
 
   double get usagePercent => (_usedCells / _nCtx) * 100;
   bool get isOverSafeThreshold => _usedCells >= _safeCapacity;

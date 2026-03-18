@@ -21,6 +21,12 @@ enum LlamaTemplateType {
   /// Alpaca 格式
   alpaca,
 
+  /// Gemma 格式
+  gemma,
+
+  /// MiniCPM 格式
+  minicpm,
+
   /// 未知格式 (使用默认)
   unknown,
 }
@@ -31,56 +37,67 @@ class LlamaTemplate {
 
   /// 应用原生模板（使用 llama_chat_apply_template）
   String applyNative(List<LlamaChatMessage> messages, {String? template}) {
+    Pointer<bindings.llama_chat_message>? chatMessages;
+    Pointer<Char>? tmplPtr;
+
     try {
-      final chatMessages = _toNativeChatMessages(messages);
+      chatMessages = _toNativeChatMessages(messages);
+
+      final tmpl = template;
+      if (tmpl != null) {
+        tmplPtr = tmpl.toNativeUtf8().cast<Char>();
+      }
+
+      final totalChars = messages.fold<int>(0, (sum, msg) => sum + msg.content.length);
+      var bufferSize = (totalChars * 4).clamp(1024, 1024 * 1024);
+      var buffer = calloc<Char>(bufferSize);
 
       try {
-        final totalChars = messages.fold<int>(0, (sum, msg) => sum + msg.content.length);
-        var bufferSize = (totalChars * 4).clamp(1024, 1024 * 1024);
-        var buffer = calloc<Char>(bufferSize);
+        var result = bindings.llama_chat_apply_template(
+          tmplPtr ?? nullptr,
+          chatMessages,
+          messages.length,
+          true,
+          buffer,
+          bufferSize,
+        );
 
-        try {
-          var result = bindings.llama_chat_apply_template(
-            nullptr,
+        if (result > bufferSize) {
+          calloc.free(buffer);
+          bufferSize = result + 1;
+          buffer = calloc<Char>(bufferSize);
+
+          result = bindings.llama_chat_apply_template(
+            tmplPtr ?? nullptr,
             chatMessages,
             messages.length,
             true,
             buffer,
             bufferSize,
           );
+        }
 
-          if (result > bufferSize) {
-            calloc.free(buffer);
-            bufferSize = result + 1;
-            buffer = calloc<Char>(bufferSize);
-
-            result = bindings.llama_chat_apply_template(
-              nullptr,
-              chatMessages,
-              messages.length,
-              true,
-              buffer,
-              bufferSize,
-            );
-          }
-
-          if (result > 0) {
-            final formattedText = buffer.cast<Utf8>().toDartString(length: result);
-            _logger.debug('Applied native template, length=$result');
-            return formattedText;
-          } else {
-            _logger.error('Failed to apply template, result: $result');
-            return applyFallback(messages, LlamaTemplateType.chatml);
-          }
-        } finally {
-          calloc.free(buffer);
+        if (result > 0) {
+          final formattedText = buffer.cast<Utf8>().toDartString(length: result);
+          _logger.debug('Applied native template, length=$result');
+          return formattedText;
+        } else {
+          _logger.error('Failed to apply template, result: $result');
+          return applyFallback(messages, LlamaTemplateType.chatml);
         }
       } finally {
-        _freeChatMessages(chatMessages, messages.length);
+        calloc.free(buffer);
       }
     } catch (e) {
       _logger.error('Native template application failed: $e');
       return applyFallback(messages, LlamaTemplateType.chatml);
+    } finally {
+      if (chatMessages != null) {
+        _freeChatMessages(chatMessages, messages.length);
+      }
+      if (tmplPtr != null) {
+        calloc.free(tmplPtr);
+      }
     }
   }
 
@@ -97,6 +114,10 @@ class LlamaTemplate {
         return _applyChatMLTemplate(messages);
       case LlamaTemplateType.alpaca:
         return _applyAlpacaTemplate(messages);
+      case LlamaTemplateType.gemma:
+        return _applyGemmaTemplate(messages);
+      case LlamaTemplateType.minicpm:
+        return _applyMiniCPMTemplate(messages);
       case LlamaTemplateType.unknown:
         return _applyDefaultTemplate(messages);
     }
@@ -216,6 +237,39 @@ class LlamaTemplate {
       buffer.write(msg.content);
       buffer.write('\n');
     }
+
+    return buffer.toString();
+  }
+
+  String _applyGemmaTemplate(List<LlamaChatMessage> messages) {
+    final buffer = StringBuffer();
+
+    for (final msg in messages) {
+      final role = msg.role.name;
+      buffer.write('<start_of_turn>$role\n');
+      buffer.write(msg.content.trim());
+      buffer.write('<end_of_turn>\n');
+    }
+
+    buffer.write('<start_of_turn>model\n');
+
+    return buffer.toString();
+  }
+
+  String _applyMiniCPMTemplate(List<LlamaChatMessage> messages) {
+    final buffer = StringBuffer();
+
+    for (final msg in messages) {
+      if (msg.role == LlamaMessageRole.user) {
+        buffer.write('<用户>${msg.content}</用户>\n');
+      } else if (msg.role == LlamaMessageRole.assistant) {
+        buffer.write('<AI>${msg.content}</AI>\n');
+      } else {
+        buffer.write('${msg.content}\n');
+      }
+    }
+
+    buffer.write('<AI>');
 
     return buffer.toString();
   }
