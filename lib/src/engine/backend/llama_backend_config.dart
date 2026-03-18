@@ -87,6 +87,7 @@ class LlamaBackendConfig {
     params.n_ubatch = nUBatch;
     params.n_threads = nThreads;
     params.n_threads_batch = nThreads;
+    params.no_perf = false;
     return params;
   }
 }

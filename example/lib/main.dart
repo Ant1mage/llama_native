@@ -38,9 +38,19 @@ class _ChatPageState extends State<ChatPage> {
   final LlamaEngine _engine = LlamaEngine();
   LlamaChat? _chat;
 
-  String _statusText = '请选择模型文件开始';
+  List<String> _statusLines = ['请选择模型文件开始'];
   String? _modelPath;
+  String _selectedModel = '';
   bool _isSummarizing = false;
+
+  PerformanceMetrics _performanceMetrics = PerformanceMetrics.empty();
+  List<double>? _lastEmbedding;
+  String _embeddingInput = '';
+
+  List<String> _getDeviceInfo() {
+    final info = PlatformInfo.getHardwareInfo().split('\n');
+    return ['Model: $_selectedModel', ...info].where((line) => line.trim().isNotEmpty).toList();
+  }
 
   @override
   void initState() {
@@ -49,18 +59,16 @@ class _ChatPageState extends State<ChatPage> {
       setState(() {
         switch (state) {
           case LoadState.idle:
-            _statusText = '请选择模型文件开始';
+            _statusLines = ['请选择模型文件开始'];
             break;
           case LoadState.initializing:
-            _statusText = '正在初始化...';
+            _statusLines = ['正在初始化...'];
             break;
           case LoadState.loading:
-            _statusText = '正在加载模型...';
+            _statusLines = ['正在加载模型...'];
             break;
           case LoadState.ready:
-            setState(() {
-              _statusText = deviceInfo();
-            });
+            _statusLines = _getDeviceInfo();
             _chat = LlamaChat(
               engine: _engine,
               systemPrompt: "你叫Lumen, 是一个专业的智能助手, 每次回答不得超于4096字, **去掉思考过程**, 请严格按照这个指示",
@@ -68,7 +76,7 @@ class _ChatPageState extends State<ChatPage> {
             );
             break;
           case LoadState.error:
-            _statusText = '错误: ${_engine.error}';
+            _statusLines = ['错误: ${_engine.error}'];
             break;
         }
       });
@@ -78,21 +86,19 @@ class _ChatPageState extends State<ChatPage> {
       setState(() {
         switch (progress) {
           case LoadProgress.initializing:
-            _statusText = '正在初始化...';
+            _statusLines = ['正在初始化...'];
             break;
           case LoadProgress.allocatingMemory:
-            _statusText = '正在分配内存...';
+            _statusLines = ['正在分配内存...'];
             break;
           case LoadProgress.loadingModel:
-            _statusText = '正在加载模型...';
+            _statusLines = ['正在加载模型...'];
             break;
           case LoadProgress.creatingContext:
-            _statusText = '正在创建上下文...';
+            _statusLines = ['正在创建上下文...'];
             break;
           case LoadProgress.ready:
-            setState(() {
-              _statusText = deviceInfo();
-            });
+            _statusLines = _getDeviceInfo();
             break;
         }
       });
@@ -104,7 +110,7 @@ class _ChatPageState extends State<ChatPage> {
 
     setState(() {
       _isSummarizing = true;
-      _statusText = '正在生成对话摘要...';
+      _statusLines = ['正在生成对话摘要...'];
     });
 
     try {
@@ -116,7 +122,8 @@ class _ChatPageState extends State<ChatPage> {
         return '';
       }
 
-      final summaryPrompt = '''请用简洁的语言总结以下对话内容，保留关键信息，不超过200字。只输出摘要内容，不要输出其他内容。
+      final summaryPrompt =
+          '''请用简洁的语言总结以下对话内容，保留关键信息，不超过200字。只输出摘要内容，不要输出其他内容。
 
 对话内容：
 $conversationText
@@ -137,7 +144,7 @@ $conversationText
       debugPrint('生成摘要: $summary');
 
       setState(() {
-        _statusText = deviceInfo();
+        _statusLines = _getDeviceInfo();
         _isSummarizing = false;
       });
 
@@ -145,7 +152,7 @@ $conversationText
     } catch (e) {
       debugPrint('生成摘要失败: $e');
       setState(() {
-        _statusText = deviceInfo();
+        _statusLines = _getDeviceInfo();
         _isSummarizing = false;
       });
       return '';
@@ -161,11 +168,6 @@ $conversationText
     super.dispose();
   }
 
-  String _selectedModel = '';
-  String deviceInfo() {
-    return "Model: $_selectedModel \n ${PlatformInfo.getHardwareInfo()}";
-  }
-
   Future<void> _pickModel() async {
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.any, allowMultiple: false);
@@ -173,9 +175,9 @@ $conversationText
       if (result != null) {
         String path = result.files.single.path!;
         if (path.endsWith('.gguf')) {
-          print("成功选中模型: $path");
+          debugPrint("成功选中模型: $path");
         } else {
-          print("请选择正确的 GGUF 文件");
+          debugPrint("请选择正确的 GGUF 文件");
         }
       }
 
@@ -193,11 +195,11 @@ $conversationText
           final destinationFile = File(destinationPath);
 
           if (!await destinationFile.exists()) {
-            print("正在拷贝模型到沙盒，请稍候...");
+            debugPrint("正在拷贝模型到沙盒，请稍候...");
             await sourceFile.copy(destinationPath);
           }
 
-          print("加载模型: $destinationPath");
+          debugPrint("加载模型: $destinationPath");
         } else {
           destinationPath = result.files.single.path!;
         }
@@ -207,7 +209,7 @@ $conversationText
       }
     } catch (e) {
       setState(() {
-        _statusText = '选择模型失败: $e';
+        _statusLines = ['选择模型失败: $e'];
       });
     }
   }
@@ -248,10 +250,28 @@ $conversationText
           isStreaming: false,
         );
       });
+
+      final metrics = await _engine.getPerformanceMetrics();
+      setState(() {
+        _performanceMetrics = metrics;
+      });
     } catch (e) {
       setState(() {
         _messages.last = _DisplayMessage(role: LlamaMessageRole.assistant, content: '生成回复时出错: $e', isStreaming: false);
       });
+    }
+  }
+
+  Future<void> _computeEmbedding() async {
+    if (!_engine.isReady || _embeddingInput.isEmpty) return;
+
+    try {
+      final embedding = await _engine.embed(_embeddingInput);
+      setState(() {
+        _lastEmbedding = embedding;
+      });
+    } catch (e) {
+      debugPrint('Embedding error: $e');
     }
   }
 
@@ -284,6 +304,8 @@ $conversationText
     setState(() {
       _messages.clear();
       _chat?.reset();
+      _performanceMetrics = PerformanceMetrics.empty();
+      _lastEmbedding = null;
     });
   }
 
@@ -309,12 +331,7 @@ $conversationText
       ),
       body: Column(
         children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(8),
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            child: Text(_statusText, style: Theme.of(context).textTheme.bodySmall, textAlign: TextAlign.center),
-          ),
+          _buildStatusPanel(),
           if (_chat?.conversationSummary.isNotEmpty == true)
             Container(
               width: double.infinity,
@@ -322,28 +339,33 @@ $conversationText
               color: Theme.of(context).colorScheme.primaryContainer,
               child: Text(
                 '📝 对话摘要: ${_chat!.conversationSummary}',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onPrimaryContainer,
-                    ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.onPrimaryContainer),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+          _buildPerformancePanel(),
+          _buildEmbeddingPanel(),
           Expanded(
             child: _messages.isEmpty
                 ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.chat_bubble_outline, size: 64, color: Theme.of(context).colorScheme.outline),
-                        const SizedBox(height: 16),
-                        Text(
-                          _engine.isReady ? '开始对话吧！' : '请先加载模型',
-                          style: Theme.of(
-                            context,
-                          ).textTheme.bodyLarge?.copyWith(color: Theme.of(context).colorScheme.outline),
-                        ),
-                      ],
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.chat_bubble_outline, size: 64, color: Theme.of(context).colorScheme.outline),
+                          const SizedBox(height: 16),
+                          Text(
+                            _engine.isReady ? '开始对话吧！' : '请先加载模型',
+                            style: Theme.of(
+                              context,
+                            ).textTheme.bodyLarge?.copyWith(color: Theme.of(context).colorScheme.outline),
+                          ),
+                        ],
+                      ),
                     ),
                   )
                 : ListView.builder(
@@ -404,6 +426,141 @@ $conversationText
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildStatusPanel() {
+    final colors = [Colors.blueAccent, Colors.purpleAccent, Colors.blueGrey];
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 4.0,
+      children: _statusLines.asMap().entries.map((entry) {
+        final index = entry.key;
+        final line = entry.value;
+        final bgColor = colors[index % colors.length];
+        final fgColor = Colors.white;
+
+        return Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.all(Radius.circular(6)),
+            color: bgColor,
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          // color: bgColor,
+          child: Text(
+            line,
+            style: TextStyle(fontSize: 13, color: fgColor),
+            textAlign: TextAlign.center,
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildPerformancePanel() {
+    if (!_engine.isReady) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      color: _performanceMetrics.isOverloaded
+          ? Colors.red.withValues(alpha: 0.1)
+          : Theme.of(context).colorScheme.surfaceContainerLow,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _buildMetricItem('ms/tok', _performanceMetrics.msPerToken.toStringAsFixed(1)),
+          _buildMetricItem('t/s', _performanceMetrics.tokensPerSecond.toStringAsFixed(1)),
+          _buildMetricItem('Prompt', _performanceMetrics.nPromptEval.toString()),
+          _buildMetricItem('Eval', _performanceMetrics.nEval.toString()),
+          if (_performanceMetrics.isOverloaded)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Text('过载', style: TextStyle(color: Colors.red, fontSize: 12)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetricItem(String label, String value) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+        Text(label, style: TextStyle(fontSize: 10, color: Theme.of(context).colorScheme.outline)),
+      ],
+    );
+  }
+
+  Widget _buildEmbeddingPanel() {
+    if (!_engine.isReady) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.scatter_plot, size: 16),
+              const SizedBox(width: 8),
+              Text('Embedding', style: Theme.of(context).textTheme.titleSmall),
+              const Spacer(),
+              if (_lastEmbedding != null)
+                Text(
+                  'dim: ${_lastEmbedding!.length}',
+                  style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.outline),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  decoration: InputDecoration(
+                    hintText: '输入文本计算 Embedding',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    isDense: true,
+                  ),
+                  style: const TextStyle(fontSize: 14),
+                  onChanged: (value) => _embeddingInput = value,
+                  onSubmitted: (_) => _computeEmbedding(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.play_arrow),
+                onPressed: _embeddingInput.isNotEmpty ? _computeEmbedding : null,
+                style: IconButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.primaryContainer),
+              ),
+            ],
+          ),
+          if (_lastEmbedding != null) ...[const SizedBox(height: 8), _buildEmbeddingPreview()],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmbeddingPreview() {
+    final preview = _lastEmbedding!.take(8).map((v) => v.toStringAsFixed(3)).join(', ');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(color: Theme.of(context).colorScheme.surface, borderRadius: BorderRadius.circular(4)),
+      child: Text(
+        '[$preview, ...]',
+        style: TextStyle(fontSize: 11, fontFamily: 'monospace', color: Theme.of(context).colorScheme.outline),
       ),
     );
   }

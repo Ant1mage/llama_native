@@ -323,6 +323,81 @@ class LlamaModel with Disposable {
     }
   }
 
+  List<double> embed(List<int> tokens) {
+    if (_disposed) throw StateError('Model is disposed');
+    if (tokens.isEmpty) return [];
+
+    final nTokens = tokens.length;
+    final ctxSize = nTokens > 512 ? nTokens : 512;
+
+    final ctxParams = bindings.llama_context_default_params();
+    ctxParams.n_ctx = ctxSize;
+    ctxParams.n_batch = ctxSize;
+    ctxParams.n_ubatch = ctxSize;
+    ctxParams.embeddings = true;
+    ctxParams.n_threads = 4;
+    ctxParams.n_threads_batch = 4;
+
+    final ctx = bindings.llama_new_context_with_model(_modelPtr!, ctxParams);
+    if (ctx == nullptr) {
+      throw LlamaException.context('Failed to create embedding context');
+    }
+
+    try {
+      final batch = bindings.llama_batch_init(tokens.length, 0, 1);
+
+      try {
+        for (var i = 0; i < tokens.length; i++) {
+          batch.token[i] = tokens[i];
+          batch.pos[i] = i;
+          batch.n_seq_id[i] = 1;
+          batch.seq_id[i][0] = 0;
+          batch.logits[i] = 0;
+        }
+        batch.n_tokens = tokens.length;
+        batch.logits[tokens.length - 1] = 1;
+
+        final result = bindings.llama_decode(ctx, batch);
+        if (result != 0) {
+          throw LlamaException.inference('Embedding decode failed: $result');
+        }
+
+        final nEmbd = bindings.llama_model_n_embd(_modelPtr!);
+        final embeddingList = <double>[];
+
+        var embeddings = bindings.llama_get_embeddings_seq(ctx, 0);
+        if (embeddings != nullptr) {
+          for (var i = 0; i < nEmbd; i++) {
+            embeddingList.add(embeddings[i]);
+          }
+          return embeddingList;
+        }
+
+        embeddings = bindings.llama_get_embeddings_ith(ctx, tokens.length - 1);
+        if (embeddings != nullptr) {
+          for (var i = 0; i < nEmbd; i++) {
+            embeddingList.add(embeddings[i]);
+          }
+          return embeddingList;
+        }
+
+        embeddings = bindings.llama_get_embeddings(ctx);
+        if (embeddings != nullptr) {
+          for (var i = 0; i < nEmbd; i++) {
+            embeddingList.add(embeddings[i]);
+          }
+          return embeddingList;
+        }
+
+        throw LlamaException.inference('Failed to get embeddings from any method');
+      } finally {
+        bindings.llama_batch_free(batch);
+      }
+    } finally {
+      bindings.llama_free(ctx);
+    }
+  }
+
   @override
   void dispose() {
     if (_disposed) return;

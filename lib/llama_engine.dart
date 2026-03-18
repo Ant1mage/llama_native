@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:llama_native/src/llama_isolate.dart';
 import 'package:llama_native/src/engine/context/token_generation.dart';
+import 'package:llama_native/src/engine/context/performance_metrics.dart';
 import 'package:llama_native/src/utils/platform_info.dart';
 
 enum LoadState { idle, initializing, loading, ready, error }
@@ -126,6 +127,20 @@ class LlamaEngine {
     if (_isolate != null && _isolate!.isModelLoaded) {
       await _isolate!.applySummary(summary);
     }
+  }
+
+  Future<PerformanceMetrics> getPerformanceMetrics() async {
+    if (_isolate == null || !_isolate!.isModelLoaded) {
+      return PerformanceMetrics.empty();
+    }
+    return _isolate!.getPerformanceMetrics();
+  }
+
+  Future<List<double>> embed(String text) async {
+    if (!isReady || _isolate == null) {
+      throw StateError('Engine not ready');
+    }
+    return _isolate!.embed(text);
   }
 
   Future<void> dispose() async {

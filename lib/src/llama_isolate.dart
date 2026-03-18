@@ -4,6 +4,7 @@ import 'dart:isolate';
 import 'package:llama_native/llama_chat_message.dart';
 import 'package:llama_native/src/engine/context/inference_config.dart';
 import 'package:llama_native/src/engine/context/llama_context.dart';
+import 'package:llama_native/src/engine/context/performance_metrics.dart';
 import 'package:llama_native/src/engine/context/token_generation.dart';
 import 'package:llama_native/src/engine/model/llama_model.dart';
 import 'package:llama_native/src/engine/sampling/sampling_config.dart';
@@ -33,6 +34,10 @@ enum _MessageType {
   needsSummarizationResult,
   applySummary,
   applySummaryResult,
+  getPerformanceMetrics,
+  performanceMetricsResult,
+  embed,
+  embedResult,
 }
 
 class _IsolateMessage {
@@ -320,6 +325,64 @@ class LlamaIsolate {
     return completer.future;
   }
 
+  Future<PerformanceMetrics> getPerformanceMetrics() async {
+    if (!_isModelLoaded || _sendPort == null) {
+      return PerformanceMetrics.empty();
+    }
+
+    final completer = Completer<PerformanceMetrics>();
+    final responsePort = ReceivePort();
+
+    _sendPort!.send(_IsolateMessage(_MessageType.getPerformanceMetrics, {'responsePort': responsePort.sendPort}));
+
+    responsePort.listen((message) {
+      if (message is _IsolateMessage && message.type == _MessageType.performanceMetricsResult) {
+        final data = message.data as Map<String, dynamic>;
+        completer.complete(
+          PerformanceMetrics(
+            tStartMs: data['tStartMs'] as double,
+            tLoadMs: data['tLoadMs'] as double,
+            tPromptEvalMs: data['tPromptEvalMs'] as double,
+            tEvalMs: data['tEvalMs'] as double,
+            nPromptEval: data['nPromptEval'] as int,
+            nEval: data['nEval'] as int,
+            nReused: data['nReused'] as int,
+            tSampleMs: data['tSampleMs'] as double,
+            nSample: data['nSample'] as int,
+          ),
+        );
+        responsePort.close();
+      }
+    });
+
+    return completer.future;
+  }
+
+  Future<List<double>> embed(String text) async {
+    if (!_isModelLoaded || _sendPort == null) {
+      throw StateError('Model not loaded');
+    }
+
+    final completer = Completer<List<double>>();
+    final responsePort = ReceivePort();
+
+    _sendPort!.send(_IsolateMessage(_MessageType.embed, {'text': text, 'responsePort': responsePort.sendPort}));
+
+    responsePort.listen((message) {
+      if (message is _IsolateMessage) {
+        if (message.type == _MessageType.embedResult) {
+          completer.complete(List<double>.from(message.data as List));
+          responsePort.close();
+        } else if (message.type == _MessageType.error) {
+          completer.completeError(message.data);
+          responsePort.close();
+        }
+      }
+    });
+
+    return completer.future;
+  }
+
   Future<void> dispose() async {
     if (_sendPort != null) {
       final completer = Completer<void>();
@@ -422,6 +485,14 @@ class LlamaIsolate {
             _handleApplySummary(message.data, context, logger);
             break;
 
+          case _MessageType.getPerformanceMetrics:
+            _handleGetPerformanceMetrics(message.data, context, logger);
+            break;
+
+          case _MessageType.embed:
+            _handleEmbed(message.data, model, logger);
+            break;
+
           default:
             break;
         }
@@ -480,6 +551,7 @@ class LlamaIsolate {
     try {
       logger.debug('Generating with ${tokens.length} tokens, max $maxTokens');
 
+      context.resetPerformanceMetrics();
       context.decode(tokens);
 
       for (var i = 0; i < maxTokens; i++) {
@@ -627,6 +699,53 @@ class LlamaIsolate {
       responsePort.send(_IsolateMessage(_MessageType.disposeResult, null));
     } catch (e) {
       logger.error('Dispose error: $e');
+      responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
+    }
+  }
+
+  static void _handleGetPerformanceMetrics(Map<String, dynamic> data, LlamaContext? context, Logger logger) {
+    final responsePort = data['responsePort'] as SendPort;
+
+    try {
+      final metrics = context?.performanceMetrics ?? PerformanceMetrics.empty();
+      responsePort.send(
+        _IsolateMessage(_MessageType.performanceMetricsResult, {
+          'tStartMs': metrics.tStartMs,
+          'tLoadMs': metrics.tLoadMs,
+          'tPromptEvalMs': metrics.tPromptEvalMs,
+          'tEvalMs': metrics.tEvalMs,
+          'nPromptEval': metrics.nPromptEval,
+          'nEval': metrics.nEval,
+          'nReused': metrics.nReused,
+          'tSampleMs': metrics.tSampleMs,
+          'nSample': metrics.nSample,
+        }),
+      );
+    } catch (e) {
+      logger.error('Get performance metrics error: $e');
+      responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
+    }
+  }
+
+  static void _handleEmbed(Map<String, dynamic> data, LlamaModel? model, Logger logger) {
+    final responsePort = data['responsePort'] as SendPort;
+    final text = data['text'] as String;
+
+    try {
+      if (model == null) {
+        throw StateError('Model not loaded');
+      }
+
+      final tokens = model.tokenize(text, addBos: true);
+      if (tokens.isEmpty) {
+        responsePort.send(_IsolateMessage(_MessageType.embedResult, <double>[]));
+        return;
+      }
+
+      final embedding = model.embed(tokens);
+      responsePort.send(_IsolateMessage(_MessageType.embedResult, embedding));
+    } catch (e) {
+      logger.error('Embed error: $e');
       responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
     }
   }
