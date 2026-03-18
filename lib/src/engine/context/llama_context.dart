@@ -9,6 +9,7 @@ import 'package:llama_native/src/engine/backend/llama_backend_config.dart';
 import 'package:llama_native/src/engine/model/llama_model.dart';
 import 'package:llama_native/src/engine/context/inference_config.dart';
 import 'package:llama_native/src/engine/context/performance_metrics.dart';
+import 'package:llama_native/src/engine/context/token_generation.dart';
 import 'package:llama_native/src/engine/sampling/sampling_config.dart';
 import 'package:llama_native/src/engine/cache/kv_cache_manager.dart';
 import 'package:llama_native/src/log/logger.dart';
@@ -30,25 +31,12 @@ class LlamaContext with Disposable {
   final List<int> _prevTokens = [];
   int _nPrev = 64;
 
-  String _conversationSummary = '';
-  String Function(String conversationText)? _summarizeCallback;
-
   LlamaContext._(this._model, this._config) : _logger = Logger('LlamaContext');
 
   factory LlamaContext.create(LlamaModel model, InferenceConfig config) {
     final context = LlamaContext._(model, config);
     context._initialize();
     return context;
-  }
-
-  void setSummarizeCallback(String Function(String conversationText)? callback) {
-    _summarizeCallback = callback;
-  }
-
-  String get conversationSummary => _conversationSummary;
-
-  void setConversationSummary(String summary) {
-    _conversationSummary = summary;
   }
 
   void _initialize() {
@@ -311,49 +299,28 @@ class LlamaContext with Disposable {
     final batchSize = _config.nBatch;
 
     if (nTokens <= batchSize) {
-      _decodeBatch(tokens, checkOverflow: true);
+      _decodeBatch(tokens);
     } else {
       for (var offset = 0; offset < nTokens; offset += batchSize) {
         final end = (offset + batchSize < nTokens) ? offset + batchSize : nTokens;
         final batch = tokens.sublist(offset, end);
-        _decodeBatch(batch, checkOverflow: true);
+        _decodeBatch(batch);
       }
     }
   }
 
-  void _decodeBatchRebuild(List<int> tokens) {
+  void _decodeBatch(List<int> tokens) {
     if (tokens.isEmpty) return;
 
     final nTokens = tokens.length;
-    final batchSize = _config.nBatch;
-
-    if (nTokens <= batchSize) {
-      _decodeBatch(tokens, checkOverflow: false);
-    } else {
-      for (var offset = 0; offset < nTokens; offset += batchSize) {
-        final end = (offset + batchSize < nTokens) ? offset + batchSize : nTokens;
-        final batch = tokens.sublist(offset, end);
-        _decodeBatch(batch, checkOverflow: false);
-      }
-    }
-  }
-
-  void _decodeBatch(List<int> tokens, {bool checkOverflow = true}) {
-    if (tokens.isEmpty) return;
-
-    final nTokens = tokens.length;
-
-    if (checkOverflow && _nPast + nTokens > _config.nCtx) {
-      _logger.warning('KV cache would overflow: _nPast=$_nPast + nTokens=$nTokens > nCtx=${_config.nCtx}');
-      _autoTruncateCache(nTokens);
-    }
+    final startPos = _kvCache?.allocatePositions(nTokens) ?? _nPast;
 
     final batch = bindings.llama_batch_init(nTokens, 0, 1);
 
     try {
       for (var i = 0; i < nTokens; i++) {
         batch.token.elementAt(i).value = tokens[i];
-        batch.pos.elementAt(i).value = _nPast + i;
+        batch.pos.elementAt(i).value = startPos + i;
         batch.n_seq_id.elementAt(i).value = 1;
         batch.seq_id.elementAt(i).value.elementAt(0).value = 0;
         batch.logits.elementAt(i).value = 0;
@@ -374,109 +341,10 @@ class LlamaContext with Disposable {
         _prevTokens.removeRange(0, removeCount);
       }
 
-      _nPast += nTokens;
-      _kvCache?.addProcessed(nTokens);
+      _nPast = startPos + nTokens;
     } finally {
       bindings.llama_batch_free(batch);
     }
-  }
-
-  String? _pendingSummarizationText;
-  int _pendingNeededTokens = 0;
-
-  bool get needsSummarization => _pendingSummarizationText != null;
-
-  String? getSummarizationRequest() {
-    final text = _pendingSummarizationText;
-    _pendingSummarizationText = null;
-    return text;
-  }
-
-  void applySummaryAndRebuild(String summary) {
-    if (summary.isEmpty) {
-      _logger.warning('Empty summary provided, using fallback');
-      _fallbackRebuild(_pendingNeededTokens);
-      return;
-    }
-
-    _conversationSummary = summary;
-    _logger.info('Applying summary: ${summary.length} chars');
-
-    final mem = bindings.llama_get_memory(_ctxPtr!);
-    bindings.llama_memory_clear(mem, true);
-    bindings.llama_synchronize(_ctxPtr!);
-    _nPast = 0;
-    _prevTokens.clear();
-
-    final tokensToRestore = <int>[];
-
-    if (_keepPrefixTokens.isNotEmpty) {
-      tokensToRestore.addAll(_keepPrefixTokens);
-    }
-
-    if (_conversationSummary.isNotEmpty) {
-      final summaryPrompt = '对话历史摘要：$_conversationSummary\n\n';
-      final summaryTokens = _model.tokenize(summaryPrompt, addBos: false);
-      tokensToRestore.addAll(summaryTokens);
-      _logger.info('Added summary tokens: ${summaryTokens.length}');
-    }
-
-    final availableSpace = _config.nCtx - tokensToRestore.length - _pendingNeededTokens - (_config.nCtx ~/ 8);
-    if (availableSpace > 0 && _prevTokens.isNotEmpty) {
-      final recentCount = availableSpace < _prevTokens.length ? availableSpace : _prevTokens.length;
-      final recentStart = _prevTokens.length - recentCount;
-      tokensToRestore.addAll(_prevTokens.sublist(recentStart));
-      _logger.info('Added recent tokens: $recentCount');
-    }
-
-    if (tokensToRestore.isNotEmpty) {
-      _logger.info('Re-decoding ${tokensToRestore.length} tokens with summary');
-      _decodeBatchRebuild(tokensToRestore);
-    }
-
-    _pendingNeededTokens = 0;
-  }
-
-  void _fallbackRebuild(int neededTokens) {
-    final mem = bindings.llama_get_memory(_ctxPtr!);
-    bindings.llama_memory_clear(mem, true);
-    bindings.llama_synchronize(_ctxPtr!);
-    _nPast = 0;
-    _prevTokens.clear();
-
-    final tokensToRestore = <int>[];
-
-    if (_keepPrefixTokens.isNotEmpty) {
-      tokensToRestore.addAll(_keepPrefixTokens);
-      _logger.info('Will restore ${_keepPrefixTokens.length} keep prefix tokens');
-    }
-
-    final availableSpace = _config.nCtx - tokensToRestore.length - neededTokens - (_config.nCtx ~/ 8);
-    if (availableSpace > 0 && _prevTokens.isNotEmpty) {
-      final recentCount = availableSpace < _prevTokens.length ? availableSpace : _prevTokens.length;
-      final recentStart = _prevTokens.length - recentCount;
-      tokensToRestore.addAll(_prevTokens.sublist(recentStart));
-      _logger.info('Will restore $recentCount recent tokens');
-    }
-
-    if (tokensToRestore.isNotEmpty) {
-      _logger.info('Re-decoding ${tokensToRestore.length} tokens after cache clear');
-      _decodeBatchRebuild(tokensToRestore);
-    }
-  }
-
-  void _autoTruncateCache(int neededTokens) {
-    _logger.warning('Context full, preparing for cache rebuild');
-
-    if (_summarizeCallback != null && _prevTokens.isNotEmpty) {
-      final conversationText = _model.detokenize(_prevTokens);
-      _pendingSummarizationText = conversationText;
-      _pendingNeededTokens = neededTokens;
-      _logger.info('Requesting summarization for ${conversationText.length} chars');
-      return;
-    }
-
-    _fallbackRebuild(neededTokens);
   }
 
   int sample({bool grammarFirst = false}) {
@@ -582,10 +450,11 @@ class LlamaContext with Disposable {
   void decodeOne(int token) {
     if (_disposed) throw StateError('Context is disposed');
 
+    final pos = _kvCache?.allocatePositions(1) ?? _nPast;
     final batch = bindings.llama_batch_init(1, 0, 1);
     try {
       batch.token.elementAt(0).value = token;
-      batch.pos.elementAt(0).value = _nPast;
+      batch.pos.elementAt(0).value = pos;
       batch.n_seq_id.elementAt(0).value = 1;
       batch.seq_id.elementAt(0).value.elementAt(0).value = 0;
       batch.logits.elementAt(0).value = 1;
@@ -596,8 +465,7 @@ class LlamaContext with Disposable {
         throw LlamaException.inference('Decode failed: $ret');
       }
 
-      _nPast += 1;
-      _kvCache?.addProcessed(1);
+      _nPast = pos + 1;
     } finally {
       bindings.llama_batch_free(batch);
     }
@@ -607,7 +475,8 @@ class LlamaContext with Disposable {
     if (tokens.isEmpty) return;
 
     final nTokens = tokens.length;
-    _logger.debug('Processing $nTokens tokens');
+    final startPos = _kvCache?.allocatePositions(nTokens) ?? _nPast;
+    _logger.debug('Processing $nTokens tokens at position $startPos');
 
     final tokenArray = calloc<Int32>(nTokens);
     try {
@@ -627,8 +496,7 @@ class LlamaContext with Disposable {
         throw LlamaException.kvCache('KV cache full, cannot decode batch');
       }
 
-      _nPast += nTokens;
-      _kvCache?.addProcessed(nTokens);
+      _nPast = startPos + nTokens;
       _logger.debug('Processed $nTokens tokens, nPast now: $_nPast');
     } catch (e) {
       _logger.error('Error processing tokens: $e');
@@ -661,11 +529,27 @@ class LlamaContext with Disposable {
     _logger.info('Context reset successfully');
   }
 
-  int get remainingContext => _config.nCtx - _nPast;
+  int get remainingContext => _kvCache?.nRemain ?? (_config.nCtx - _nPast);
 
-  bool get needsTruncation => remainingContext < _config.nBatch;
+  bool get needsTruncation => _kvCache?.needsTruncation ?? (remainingContext < _config.nBatch);
 
   int get keepPrefix => _kvCache?.keepPrefix ?? 0;
+
+  KVCacheStatus get kvCacheStatus => _kvCache?.getStatus() ?? KVCacheStatus.empty();
+
+  void fullResetKVCache() {
+    _kvCache?.fullReset();
+    _nPast = 0;
+    _prevTokens.clear();
+    _logger.info('KV cache fully reset');
+  }
+
+  void prepareSequentialPrefill() {
+    _kvCache?.prepareSequentialPrefill();
+    _nPast = 0;
+    _prevTokens.clear();
+    _logger.info('Prepared for sequential prefill');
+  }
 
   PerformanceMetrics get performanceMetrics {
     if (_ctxPtr == null || _disposed) {

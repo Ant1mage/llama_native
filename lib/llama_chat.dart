@@ -9,24 +9,17 @@ class LlamaChat {
   final LlamaEngine _engine;
   final String _systemPrompt;
   final int _maxTokens;
-  final Future<String> Function(String conversationText)? _summarizeCallback;
 
   final List<LlamaChatMessage> _history = [];
   final _messageController = StreamController<LlamaChatMessage>.broadcast();
 
   bool _systemPromptProcessed = false;
   List<int> _systemPromptTokens = [];
-  String _conversationSummary = '';
 
-  LlamaChat({
-    required LlamaEngine engine,
-    String systemPrompt = '',
-    int maxTokens = 1024,
-    Future<String> Function(String conversationText)? summarizeCallback,
-  }) : _engine = engine,
-       _systemPrompt = systemPrompt,
-       _maxTokens = maxTokens,
-       _summarizeCallback = summarizeCallback;
+  LlamaChat({required LlamaEngine engine, String systemPrompt = '', int maxTokens = 1024})
+    : _engine = engine,
+      _systemPrompt = systemPrompt,
+      _maxTokens = maxTokens;
 
   List<LlamaChatMessage> get history => List.unmodifiable(_history);
   Stream<LlamaChatMessage> get onMessage => _messageController.stream;
@@ -34,12 +27,10 @@ class LlamaChat {
   bool get isGenerating => _engine.isGenerating;
   int get systemPromptTokensCount => _systemPromptTokens.length;
   bool get systemPromptProcessed => _systemPromptProcessed;
-  String get conversationSummary => _conversationSummary;
 
   void clearHistory() {
     _history.clear();
     _systemPromptProcessed = false;
-    _conversationSummary = '';
   }
 
   void stop() {
@@ -80,18 +71,6 @@ class LlamaChat {
     final assistantMessage = buffer.toString();
     _history.add(LlamaChatMessage.assistant(assistantMessage));
     _messageController.add(_history.last);
-
-    final checkResult = await _engine.checkNeedsSummarization();
-    if (checkResult['needsSummarization'] == true) {
-      final conversationText = checkResult['text'] as String?;
-      if (conversationText != null && conversationText.isNotEmpty && _summarizeCallback != null) {
-        final summary = await _summarizeCallback(conversationText);
-        if (summary.isNotEmpty) {
-          _conversationSummary = summary;
-          await _engine.applySummary(summary);
-        }
-      }
-    }
   }
 
   Future<String> sendMessageAndWait(String userMessage) async {
@@ -119,7 +98,6 @@ class LlamaChat {
   Future<void> reset() async {
     _history.clear();
     _systemPromptProcessed = false;
-    _conversationSummary = '';
     await _engine.reset();
   }
 

@@ -30,10 +30,6 @@ enum _MessageType {
   disposeResult,
   setKeepPrefixTokens,
   setKeepPrefixTokensResult,
-  needsSummarizationCheck,
-  needsSummarizationResult,
-  applySummary,
-  applySummaryResult,
   getPerformanceMetrics,
   performanceMetricsResult,
   embed,
@@ -282,49 +278,6 @@ class LlamaIsolate {
     return completer.future;
   }
 
-  Future<Map<String, dynamic>> checkNeedsSummarization() async {
-    if (!_isModelLoaded || _sendPort == null) {
-      return {'needsSummarization': false, 'text': null};
-    }
-
-    final completer = Completer<Map<String, dynamic>>();
-    final responsePort = ReceivePort();
-
-    _sendPort!.send(_IsolateMessage(_MessageType.needsSummarizationCheck, {'responsePort': responsePort.sendPort}));
-
-    responsePort.listen((message) {
-      if (message is _IsolateMessage && message.type == _MessageType.needsSummarizationResult) {
-        completer.complete({
-          'needsSummarization': message.data['needsSummarization'] as bool,
-          'text': message.data['text'] as String?,
-        });
-        responsePort.close();
-      }
-    });
-
-    return completer.future;
-  }
-
-  Future<void> applySummary(String summary) async {
-    if (!_isModelLoaded || _sendPort == null) return;
-
-    final completer = Completer<void>();
-    final responsePort = ReceivePort();
-
-    _sendPort!.send(
-      _IsolateMessage(_MessageType.applySummary, {'summary': summary, 'responsePort': responsePort.sendPort}),
-    );
-
-    responsePort.listen((message) {
-      if (message is _IsolateMessage && message.type == _MessageType.applySummaryResult) {
-        completer.complete();
-        responsePort.close();
-      }
-    });
-
-    return completer.future;
-  }
-
   Future<PerformanceMetrics> getPerformanceMetrics() async {
     if (!_isModelLoaded || _sendPort == null) {
       return PerformanceMetrics.empty();
@@ -477,14 +430,6 @@ class LlamaIsolate {
             _handleSetKeepPrefixTokens(message.data, context, logger);
             break;
 
-          case _MessageType.needsSummarizationCheck:
-            _handleNeedsSummarizationCheck(message.data, context, logger);
-            break;
-
-          case _MessageType.applySummary:
-            _handleApplySummary(message.data, context, logger);
-            break;
-
           case _MessageType.getPerformanceMetrics:
             _handleGetPerformanceMetrics(message.data, context, logger);
             break;
@@ -552,6 +497,14 @@ class LlamaIsolate {
       logger.debug('Generating with ${tokens.length} tokens, max $maxTokens');
 
       context.resetPerformanceMetrics();
+
+      final kvStatus = context.kvCacheStatus;
+      if (kvStatus.isFull) {
+        logger.error('KV cache is full before generation');
+        responsePort.send(_IsolateMessage(_MessageType.error, 'KV cache full, reset required'));
+        return;
+      }
+
       context.decode(tokens);
 
       for (var i = 0; i < maxTokens; i++) {
@@ -561,12 +514,34 @@ class LlamaIsolate {
           return;
         }
 
+        final currentKvStatus = context.kvCacheStatus;
+        if (currentKvStatus.isFull) {
+          logger.error('KV cache full during generation at step $i');
+          responsePort.send(_IsolateMessage(_MessageType.error, 'KV cache full, generation interrupted'));
+          return;
+        }
+
+        if (currentKvStatus.isOverSafeThreshold) {
+          logger.warning('KV cache over safe threshold: ${currentKvStatus.usagePercent.toStringAsFixed(1)}%');
+        }
+
         final token = context.sample();
         final isEnd = context.isEos(token);
         final tokenText = context.detokenizeOne(token);
 
+        final updatedKvStatus = context.kvCacheStatus;
         responsePort.send(
-          _IsolateMessage(_MessageType.tokenGeneration, TokenGeneration(token: token, text: tokenText, isEnd: isEnd)),
+          _IsolateMessage(
+            _MessageType.tokenGeneration,
+            TokenGeneration(
+              token: token,
+              text: tokenText,
+              isEnd: isEnd,
+              kvUsed: updatedKvStatus.used,
+              kvTotal: updatedKvStatus.total,
+              kvUsagePercent: updatedKvStatus.usagePercent,
+            ),
+          ),
         );
 
         if (isEnd) break;
@@ -635,38 +610,6 @@ class LlamaIsolate {
       responsePort.send(_IsolateMessage(_MessageType.setKeepPrefixTokensResult, {'success': true}));
     } catch (e) {
       logger.error('Set keep prefix tokens error: $e');
-      responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
-    }
-  }
-
-  static void _handleNeedsSummarizationCheck(Map<String, dynamic> data, LlamaContext? context, Logger logger) {
-    final responsePort = data['responsePort'] as SendPort;
-
-    try {
-      final needsSummarization = context?.needsSummarization ?? false;
-      final summarizationText = context?.getSummarizationRequest();
-      responsePort.send(
-        _IsolateMessage(_MessageType.needsSummarizationResult, {
-          'needsSummarization': needsSummarization,
-          'text': summarizationText,
-        }),
-      );
-    } catch (e) {
-      logger.error('Needs summarization check error: $e');
-      responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
-    }
-  }
-
-  static void _handleApplySummary(Map<String, dynamic> data, LlamaContext? context, Logger logger) {
-    final responsePort = data['responsePort'] as SendPort;
-    final summary = data['summary'] as String;
-
-    try {
-      context?.applySummaryAndRebuild(summary);
-      logger.info('Applied summary and rebuilt context');
-      responsePort.send(_IsolateMessage(_MessageType.applySummaryResult, {'success': true}));
-    } catch (e) {
-      logger.error('Apply summary error: $e');
       responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
     }
   }
