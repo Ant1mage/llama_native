@@ -8,13 +8,9 @@ class LlamaBatch {
 
   LlamaBatch(this.tokens, {this.logitsAll = false});
 
-  LlamaBatch.single(List<int> tokens, {bool logitsAll = false}) : tokens = tokens, logitsAll = logitsAll;
+  LlamaBatch.single(this.tokens, {this.logitsAll = false});
 
-  @override
   void dispose() {
     _logger.debug('Batch已释放');
   }
-
-  @override
-  bool get isDisposed => false;
 }

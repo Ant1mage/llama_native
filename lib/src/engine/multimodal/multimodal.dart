@@ -213,9 +213,6 @@ class MultimodalProcessorImpl implements MultimodalProcessor {
   }
 
   @override
-  bool get isDisposed => _model == null;
-
-  @override
   void dispose() {
     if (_model == null) return;
 

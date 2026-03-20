@@ -215,7 +215,6 @@ class LlamaEmbeddings {
     return PoolingType.fromValue(bindings.llama_pooling_type$1(_ctx!).value);
   }
 
-  @override
   void dispose() {
     if (_ctx == null) return;
 

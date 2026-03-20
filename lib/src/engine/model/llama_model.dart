@@ -197,9 +197,6 @@ class LlamaModel {
     );
   }
 
-  @override
-  bool get isDisposed => _modelPtr == null;
-
   /// 估算参数量
   double _estimateParameterCount(int nEmbd, int nLayer, int nVocab) {
     // 简化估算：embedding + transformer layers
