@@ -6,7 +6,6 @@ import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
 import 'package:llama_native/src/engine/model/llama_model.dart';
 import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
 import 'package:llama_native/src/log/logger.dart';
-import 'package:llama_native/src/utils/disposable.dart';
 
 enum MediaType { image, audio }
 
@@ -56,20 +55,18 @@ class MultimodalCapabilities {
   const MultimodalCapabilities({this.supportsVision = false, this.supportsAudio = false, this.audioSampleRate = -1});
 }
 
-abstract class MultimodalProcessor with Disposable {
+abstract class MultimodalProcessor {
   MultimodalCapabilities get capabilities;
-  bool get isInitialized;
 
   Future<void> initialize(LlamaModel model, MultimodalConfig config);
   Future<List<int>> processMedia(MediaContent media);
   Future<List<int>> processPromptWithMedia(String prompt, List<MediaContent> media);
   void reset();
+  void dispose();
 }
 
 class MultimodalProcessorImpl implements MultimodalProcessor {
   final Logger _logger = Logger('MultimodalProcessor');
-  bool _initialized = false;
-  bool _disposed = false;
 
   LlamaModel? _model;
   MultimodalConfig? _config;
@@ -79,19 +76,13 @@ class MultimodalProcessorImpl implements MultimodalProcessor {
   MultimodalCapabilities get capabilities => _capabilities;
 
   @override
-  bool get isInitialized => _initialized;
-
-  @override
   Future<void> initialize(LlamaModel model, MultimodalConfig config) async {
-    if (_initialized) return;
-
     _model = model;
     _config = config;
 
     if (!config.hasMmproj) {
       _logger.warning('No mmproj path provided, multimodal support disabled');
       _capabilities = const MultimodalCapabilities();
-      _initialized = true;
       return;
     }
 
@@ -99,13 +90,12 @@ class MultimodalProcessorImpl implements MultimodalProcessor {
 
     _capabilities = const MultimodalCapabilities(supportsVision: true, supportsAudio: false);
 
-    _initialized = true;
     _logger.info('Multimodal processor initialized');
   }
 
   @override
   Future<List<int>> processMedia(MediaContent media) async {
-    if (!_initialized || _model == null) {
+    if (_model == null) {
       throw StateError('Multimodal processor not initialized');
     }
 
@@ -177,10 +167,6 @@ class MultimodalProcessorImpl implements MultimodalProcessor {
 
   @override
   Future<List<int>> processPromptWithMedia(String prompt, List<MediaContent> media) async {
-    if (!_initialized) {
-      throw StateError('Multimodal processor not initialized');
-    }
-
     if (media.isEmpty) {
       return _tokenizeText(prompt);
     }
@@ -227,17 +213,17 @@ class MultimodalProcessorImpl implements MultimodalProcessor {
   }
 
   @override
-  bool get isDisposed => _disposed;
+  bool get isDisposed => _model == null;
 
   @override
   void dispose() {
-    if (_disposed) return;
+    if (_model == null) return;
 
     _logger.debug('Disposing multimodal processor');
     reset();
 
-    _initialized = false;
-    _disposed = true;
+    _model = null;
+    _config = null;
   }
 }
 
@@ -256,7 +242,6 @@ class LlamaVision {
 
   bool get supportsVision => _processor.capabilities.supportsVision;
   bool get supportsAudio => _processor.capabilities.supportsAudio;
-  bool get isInitialized => _processor.isInitialized;
 
   Future<List<int>> encodeImage(Uint8List imageData, {int? width, int? height}) async {
     if (!supportsVision) {

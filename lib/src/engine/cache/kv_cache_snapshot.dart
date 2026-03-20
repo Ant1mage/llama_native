@@ -17,7 +17,7 @@ class KVCacheSnapshot {
 
   factory KVCacheSnapshot.fromContext(Pointer<bindings.llama_context> ctx, {int keepPrefix = 0}) {
     final stateSize = bindings.llama_state_get_size(ctx);
-    _staticLogger.info('Capturing KV cache state: size=$stateSize bytes');
+    _staticLogger.info('捕获KV缓存状态: 大小=$stateSize字节');
 
     Uint8List? stateData;
     if (stateSize > 0) {
@@ -38,17 +38,17 @@ class KVCacheSnapshot {
 
   bool restoreTo(Pointer<bindings.llama_context> ctx) {
     if (stateData == null || stateData!.isEmpty) {
-      _staticLogger.warning('No state data to restore');
+      _staticLogger.warning('没有状态数据可恢复');
       return false;
     }
 
-    _staticLogger.info('Restoring KV cache state: ${stateData!.length} bytes');
+    _staticLogger.info('恢复KV缓存状态: ${stateData!.length}字节');
 
     final buffer = calloc<Uint8>(stateData!.length);
     try {
       buffer.asTypedList(stateData!.length).setAll(0, stateData!);
       final read = bindings.llama_state_set_data(ctx, buffer.cast(), stateData!.length);
-      _staticLogger.info('KV cache state restored: $read bytes');
+      _staticLogger.info('KV缓存状态已恢复: $read字节');
       return read > 0;
     } finally {
       calloc.free(buffer);
@@ -57,15 +57,15 @@ class KVCacheSnapshot {
 
   void restoreToManager(KVCacheManager manager) {
     if (manager.isDisposed) {
-      throw StateError('KVCacheManager is disposed');
+      throw StateError('KVCacheManager已释放');
     }
 
-    _staticLogger.info('Restoring KV cache snapshot to manager: n_past=$nPast, keep_prefix=$keepPrefix');
+    _staticLogger.info('恢复KV缓存快照到管理器: n_past=$nPast, keep_prefix=$keepPrefix');
 
     manager.reset();
     manager.setKeepPrefix(keepPrefix);
     manager.addProcessed(nPast);
 
-    _staticLogger.debug('KV cache manager state restored');
+    _staticLogger.debug('KV缓存管理器状态已恢复');
   }
 }

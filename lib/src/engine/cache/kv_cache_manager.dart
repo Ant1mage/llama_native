@@ -1,20 +1,19 @@
 import 'dart:ffi';
 import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
 import 'package:llama_native/src/log/logger.dart';
-import 'package:llama_native/src/utils/disposable.dart';
+
 import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
 import 'package:llama_native/src/engine/context/token_generation.dart';
 
 typedef KVCacheRebuildCallback = List<int> Function(int neededTokens);
 
-class KVCacheManager with Disposable {
+class KVCacheManager {
   final Logger _logger = Logger('LlamaKVCacheManager');
   final int _nCtx;
   int _logicalPos = 0;
   int _keepPrefix = 0;
   int _nRecent = 256;
   int? _windowSize;
-  bool _disposed = false;
   Pointer<bindings.llama_context>? _ctx;
   KVCacheRebuildCallback? _rebuildCallback;
 
@@ -70,7 +69,7 @@ class KVCacheManager with Disposable {
 
   void setKeepPrefix(int prefixTokens) {
     _keepPrefix = prefixTokens;
-    _logger.debug('Set keep_prefix to $prefixTokens');
+    _logger.debug('设置保留前缀: $prefixTokens');
   }
 
   void addProcessed(int count) {
@@ -87,28 +86,28 @@ class KVCacheManager with Disposable {
 
   void _checkCacheManagement() {
     if (isFull) {
-      _logger.warning('KV cache FULL: $_usedCells/$_nCtx (${usagePercent.toStringAsFixed(1)}%)');
+      _logger.warning('KV缓存已满: $_usedCells/$_nCtx (${usagePercent.toStringAsFixed(1)}%)');
       _handleFullCache();
     } else if (isOverSafeThreshold) {
-      _logger.warning('KV cache over safe threshold: $_usedCells/$_nCtx (${usagePercent.toStringAsFixed(1)}%)');
+      _logger.warning('KV缓存超过安全阈值: $_usedCells/$_nCtx (${usagePercent.toStringAsFixed(1)}%)');
       _handleOverThreshold();
     } else if (needsTruncation) {
-      _logger.info('KV cache near threshold: $_usedCells/$_nCtx (${usagePercent.toStringAsFixed(1)}%)');
+      _logger.info('KV缓存接近阈值: $_usedCells/$_nCtx (${usagePercent.toStringAsFixed(1)}%)');
       _autoTruncate();
     } else if (_windowSize != null && _usedCells > _windowSize!) {
-      _logger.debug('Sliding window triggered');
+      _logger.debug('触发滑动窗口');
       _applySlidingWindow();
     }
   }
 
   void _handleFullCache() {
-    _logger.error('KV cache exhausted, cannot continue inference');
+    _logger.error('KV缓存耗尽，无法继续推理');
     throw LlamaException.kvCache('KV cache full, inference terminated');
   }
 
   void _handleOverThreshold() {
     if (_rebuildCallback != null) {
-      _logger.info('Requesting cache rebuild from callback');
+      _logger.info('请求回调重建缓存');
       try {
         final tokensToRestore = _rebuildCallback!(_nCtx ~/ 4);
         if (tokensToRestore.isNotEmpty) {
@@ -116,17 +115,17 @@ class KVCacheManager with Disposable {
           return;
         }
       } catch (e) {
-        _logger.error('Rebuild callback failed: $e');
+        _logger.error('重建回调失败: $e');
       }
     }
 
-    _logger.warning('Performing emergency truncation');
+    _logger.warning('执行紧急截断');
     _emergencyTruncate();
   }
 
   void requestRebuild(List<int> tokens) {
     if (_ctx == null) {
-      _logger.warning('Cannot rebuild: no context');
+      _logger.warning('无法重建: 无上下文');
       return;
     }
 
@@ -135,15 +134,15 @@ class KVCacheManager with Disposable {
       bindings.llama_memory_clear(mem, true);
       bindings.llama_synchronize(_ctx!);
       _logicalPos = 0;
-      _logger.info('KV cache cleared for rebuild, ready for ${tokens.length} tokens');
+      _logger.info('KV缓存已清空准备重建，可容纳${tokens.length}个Token');
     } catch (e) {
-      _logger.error('Error clearing cache for rebuild: $e');
+      _logger.error('清空缓存准备重建时出错: $e');
     }
   }
 
   void _emergencyTruncate() {
     if (_ctx == null) {
-      _logger.warning('No context for truncation');
+      _logger.warning('无上下文无法截断');
       return;
     }
 
@@ -155,8 +154,8 @@ class KVCacheManager with Disposable {
       final removeEnd = usedCells - _nRecent;
 
       if (removeEnd <= removeStart) {
-        _logger.warning('Cannot truncate: keep_prefix=$_keepPrefix, n_recent=$_nRecent, used=$usedCells');
-        _logger.warning('Falling back to full clear');
+        _logger.warning('无法截断: 保留前缀=$_keepPrefix, 最近N个=$_nRecent, 已用=$usedCells');
+        _logger.warning('回退到完全清空');
         clear();
         return;
       }
@@ -166,20 +165,20 @@ class KVCacheManager with Disposable {
       if (removed) {
         bindings.llama_synchronize(_ctx!);
         final newUsed = _usedCells;
-        _logger.info('Emergency truncation: removed positions $removeStart-$removeEnd');
-        _logger.info('Used cells: $usedCells -> $newUsed (${(newUsed / _nCtx * 100).toStringAsFixed(1)}%)');
+        _logger.info('紧急截断: 移除位置 $removeStart-$removeEnd');
+        _logger.info('已用单元: $usedCells -> $newUsed (${(newUsed / _nCtx * 100).toStringAsFixed(1)}%)');
 
         if (newUsed > _safeCapacity) {
-          _logger.error('Still over safe threshold after truncation, requesting full reset');
+          _logger.error('截断后仍超过安全阈值，请求完全重置');
           throw LlamaException.kvCache('KV cache cannot be recovered, full reset required');
         }
       } else {
-        _logger.warning('Emergency truncation failed, clearing cache');
+        _logger.warning('紧急截断失败，清空缓存');
         clear();
       }
     } catch (e) {
       if (e is LlamaException) rethrow;
-      _logger.error('Error during emergency truncation: $e');
+      _logger.error('紧急截断时出错: $e');
       clear();
     }
   }
@@ -199,7 +198,7 @@ class KVCacheManager with Disposable {
       final removeEnd = removeStart + removeCount;
 
       if (removeEnd > usedCells) {
-        _logger.warning('Invalid truncation range: $removeStart-$removeEnd (used=$usedCells)');
+        _logger.warning('无效截断范围: $removeStart-$removeEnd (已用=$usedCells)');
         return;
       }
 
@@ -208,12 +207,12 @@ class KVCacheManager with Disposable {
       if (removed) {
         bindings.llama_synchronize(_ctx!);
         final newUsed = _usedCells;
-        _logger.info('Auto truncation: removed $removeCount cells, usage: ${usedCells} -> $newUsed');
+        _logger.info('自动截断: 移除$removeCount个单元，使用量: ${usedCells} -> $newUsed');
       } else {
-        _logger.warning('Auto truncation failed');
+        _logger.warning('自动截断失败');
       }
     } catch (e) {
-      _logger.error('Error during auto truncation: $e');
+      _logger.error('自动截断时出错: $e');
     }
   }
 
@@ -236,10 +235,10 @@ class KVCacheManager with Disposable {
 
       if (removed) {
         bindings.llama_synchronize(_ctx!);
-        _logger.info('Sliding window: removed $removeCount cells');
+        _logger.info('滑动窗口: 移除$removeCount个单元');
       }
     } catch (e) {
-      _logger.error('Error during sliding window: $e');
+      _logger.error('滑动窗口时出错: $e');
     }
   }
 
@@ -249,9 +248,9 @@ class KVCacheManager with Disposable {
         final mem = bindings.llama_get_memory(_ctx!);
         bindings.llama_memory_clear(mem, true);
         bindings.llama_synchronize(_ctx!);
-        _logger.info('KV Cache fully cleared');
+        _logger.info('KV缓存已完全清空');
       } catch (e) {
-        _logger.error('Error during cache clear: $e');
+        _logger.error('清空缓存时出错: $e');
       }
     }
     _logicalPos = 0;
@@ -269,10 +268,10 @@ class KVCacheManager with Disposable {
       final actualPos = bindings.llama_memory_seq_pos_max(mem, 0);
       if (actualPos >= 0) {
         _logicalPos = actualPos + 1;
-        _logger.debug('Synced logicalPos from context: $_logicalPos');
+        _logger.debug('从上下文同步逻辑位置: $_logicalPos');
       }
     } catch (e) {
-      _logger.warning('Failed to sync from context: $e');
+      _logger.warning('从上下文同步失败: $e');
     }
   }
 
@@ -309,19 +308,19 @@ class KVCacheManager with Disposable {
   void checkMoEBuffer(int tokens) {
     final projectedUsage = _usedCells + tokens;
     if (projectedUsage > _safeCapacity) {
-      _logger.error('MoE buffer overflow: projected=$projectedUsage, safeCapacity=$_safeCapacity');
+      _logger.error('MoE缓冲区溢出: 预计=$projectedUsage, 安全容量=$_safeCapacity');
       throw LlamaException.kvCache('MoE buffer overflow, need reset before continuing');
     }
   }
 
   void fullReset() {
     if (_ctx == null) {
-      _logger.warning('No context for full reset');
+      _logger.warning('无上下文无法完全重置');
       _logicalPos = 0;
       return;
     }
 
-    _logger.info('Performing full KV cache reset');
+    _logger.info('执行KV缓存完全重置');
 
     try {
       final mem = bindings.llama_get_memory(_ctx!);
@@ -332,20 +331,20 @@ class KVCacheManager with Disposable {
 
       _logicalPos = 0;
 
-      _logger.info('KV cache fully reset: used=$_usedCells, logicalPos=$_logicalPos');
+      _logger.info('KV缓存已完全重置: 已用=$_usedCells, 逻辑位置=$_logicalPos');
     } catch (e) {
-      _logger.error('Error during full reset: $e');
+      _logger.error('完全重置时出错: $e');
       _logicalPos = 0;
     }
   }
 
   void prepareSequentialPrefill() {
     if (_ctx == null) {
-      _logger.warning('No context for sequential prefill');
+      _logger.warning('无上下文无法准备顺序预填充');
       return;
     }
 
-    _logger.info('Preparing for sequential prefill');
+    _logger.info('准备顺序预填充');
 
     fullReset();
 
@@ -355,22 +354,20 @@ class KVCacheManager with Disposable {
 
   void prefillFromPosition(int startPos, List<int> tokens) {
     if (_ctx == null) {
-      _logger.warning('No context for prefill');
+      _logger.warning('无上下文无法预填充');
       return;
     }
 
     _logicalPos = startPos;
 
-    _logger.info('Prefill prepared: startPos=$startPos, tokens=${tokens.length}');
+    _logger.info('预填充准备完成: 起始位置=$startPos, Token数=${tokens.length}');
   }
 
-  @override
   void dispose() {
-    if (_disposed) return;
-    _disposed = true;
-    _logger.debug('KVCacheManager disposed');
+    if (_ctx == null) return;
+    _ctx = null;
+    _logger.debug('KVCacheManager已释放');
   }
 
-  @override
-  bool get isDisposed => _disposed;
+  bool get isDisposed => _ctx == null;
 }

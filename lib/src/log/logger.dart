@@ -1,41 +1,69 @@
-import 'package:logger/logger.dart' as logger;
+import 'package:logging/logging.dart' as logging;
 
-/// 统一日志记录器
 class Logger {
   final String _tag;
-  final logger.Logger _logger;
+  late final logging.Logger _logger;
 
-  /// 创建日志记录器
-  Logger(this._tag, {logger.Level level = logger.Level.debug})
-      : _logger = logger.Logger(
-          printer: logger.PrettyPrinter(
-            methodCount: 0,
-            errorMethodCount: 2,
-            lineLength: 80,
-            colors: true,
-            printEmojis: false,
-            printTime: true,
-          ),
-          level: level,
-        );
+  Logger(this._tag) {
+    _logger = logging.Logger(_tag);
+  }
 
-  /// 调试日志
+  static void init({logging.Level level = logging.Level.ALL, bool printTime = true, bool printEmojis = true}) {
+    logging.hierarchicalLoggingEnabled = true;
+    logging.Logger.root.level = level;
+
+    logging.Logger.root.onRecord.listen((record) {
+      final time = printTime ? '${record.time} ' : '';
+      final emoji = printEmojis ? _getEmoji(record.level) : '';
+      final levelName = record.level.name.padRight(7);
+
+      print('$time$emoji$levelName: ${record.message}');
+
+      if (record.error != null) {
+        print('  Error: ${record.error}');
+      }
+      if (record.stackTrace != null) {
+        print('  StackTrace: ${record.stackTrace}');
+      }
+    });
+  }
+
+  static String _getEmoji(logging.Level level) {
+    switch (level) {
+      case logging.Level.FINE:
+      case logging.Level.FINER:
+      case logging.Level.FINEST:
+        return '🔍 ';
+      case logging.Level.INFO:
+        return 'ℹ️ ';
+      case logging.Level.WARNING:
+        return '⚠️ ';
+      case logging.Level.SEVERE:
+        return '❌ ';
+      case logging.Level.SHOUT:
+        return '📢 ';
+      default:
+        return '';
+    }
+  }
+
+  static Logger getLogger(String tag) {
+    return Logger(tag);
+  }
+
   void debug(String message) {
-    _logger.d('[$_tag] $message');
+    _logger.fine('[$_tag] $message');
   }
 
-  /// 信息日志
   void info(String message) {
-    _logger.i('[$_tag] $message');
+    _logger.info('[$_tag] $message');
   }
 
-  /// 警告日志
   void warning(String message) {
-    _logger.w('[$_tag] $message');
+    _logger.warning('[$_tag] $message');
   }
 
-  /// 错误日志
   void error(String message, [dynamic error, StackTrace? stackTrace]) {
-    _logger.e('[$_tag] $message', error: error, stackTrace: stackTrace);
+    _logger.severe('[$_tag] $message', error, stackTrace);
   }
 }

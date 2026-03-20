@@ -7,7 +7,6 @@ import 'llama_backend_config.dart';
 
 class LlamaBackend {
   static LlamaBackend? _instance;
-  bool _initialized = false;
 
   final Logger _logger = Logger('LlamaBackend');
   LlamaBackendConfig _config;
@@ -31,95 +30,47 @@ class LlamaBackend {
         config = const LlamaBackendConfig();
       }
       _instance = LlamaBackend._(config);
+      _instance!._logger.info('使用默认配置初始化后端');
     }
     return _instance!;
   }
 
-  static LlamaBackend createWithConfig(LlamaBackendConfig config) {
-    if (_instance != null) {
-      _instance!._logger.info('Replacing existing backend with new config');
-      if (_instance!._initialized) {
-        _instance!.dispose();
-      }
-    }
+  static void configure(LlamaBackendConfig config) {
     _instance = LlamaBackend._(config);
-    _instance!._logger.info('Initialized with custom config');
-    return _instance!;
+    _instance!._logger.info('使用自定义配置创建后端');
   }
 
   static void reset() {
-    if (_instance != null) {
-      if (_instance!._initialized) {
-        _instance!.dispose();
-      }
-      _instance = null;
-    }
+    _instance = null;
   }
 
-  void updateConfig(LlamaBackendConfig newConfig) {
-    if (_initialized) {
-      dispose();
-    }
-    _config = newConfig;
-    _logger.info('Config updated, needs re-initialization');
-  }
-
-  bool get isInitialized => _initialized;
-
-  String get currentPlatform => PlatformInfo.currentPlatform;
-
-  HardwareAcceleration detectHardwareAcceleration() {
-    return PlatformInfo.detectHardwareAcceleration();
-  }
-
-  Future<void> initialize() async {
-    if (_initialized) {
-      _logger.debug('Backend already initialized');
-      return;
-    }
-
-    _logger.info('Initializing LlamaBackend for $currentPlatform');
-    _logger.info('\n${PlatformInfo.getHardwareInfo()}');
-    _logger.info('Config: gpu_layers=${_config.gpuLayers}, mmap=${_config.useMmap}');
-
+  void initialize() {
+    _logger.info('初始化后端');
     try {
-      if (_config.numaStrategy != bindings.ggml_numa_strategy.GGML_NUMA_STRATEGY_DISABLED) {
-        try {
-          bindings.llama_numa_init(_config.numaStrategy);
-          _logger.debug('NUMA strategy applied: ${_config.numaStrategy.name}');
-        } catch (e) {
-          _logger.warning('Failed to apply NUMA strategy: $e');
-        }
+      bindings.llama_backend_init();
+
+      final gpuLayers = _config.gpuLayers;
+      if (gpuLayers > 0) {
+        _logger.info('使用GPU加速，层数: $gpuLayers');
+      } else if (gpuLayers == -1) {
+        _logger.info('使用GPU加速，卸载所有层到GPU');
+      } else {
+        _logger.info('使用CPU模式');
       }
 
-      try {
-        bindings.llama_backend_init();
-      } catch (e) {
-        throw LlamaException.backend('Failed to initialize llama backend', platform: currentPlatform);
-      }
-
-      _initialized = true;
-      _logger.info('Backend initialized successfully');
+      _logger.info('后端初始化完成');
     } catch (e) {
-      _logger.error('Failed to initialize backend: $e');
-      if (e is LlamaException) {
-        rethrow;
-      }
-      throw LlamaException.backend(e.toString(), platform: currentPlatform);
+      throw LlamaException.backend(e.toString(), platform: PlatformInfo.currentPlatform);
     }
-  }
-
-  void dispose() {
-    if (!_initialized) return;
-
-    _logger.info('Disposing backend...');
-    bindings.llama_backend_free();
-    _initialized = false;
-    _logger.info('Backend disposed');
   }
 
   bindings.llama_model_params getModelParams() {
-    return _config.toModelParams();
+    final params = bindings.llama_model_default_params();
+
+    params.n_gpu_layers = _config.gpuLayers;
+    params.split_modeAsInt = bindings.llama_split_mode.LLAMA_SPLIT_MODE_LAYER.value;
+
+    return params;
   }
 
   bindings.llama_context_params getContextParams({
@@ -128,6 +79,21 @@ class LlamaBackend {
     required int nUBatch,
     required int nThreads,
   }) {
-    return _config.toContextParams(nCtx: nCtx, nBatch: nBatch, nUBatch: nUBatch, nThreads: nThreads);
+    final params = bindings.llama_context_default_params();
+
+    params.n_ctx = nCtx;
+    params.n_batch = nBatch;
+    params.n_ubatch = nUBatch;
+    params.n_threads = nThreads;
+    params.n_seq_max = 1;
+    params.embeddings = false;
+
+    return params;
+  }
+
+  void dispose() {
+    _logger.info('释放后端资源');
+    bindings.llama_backend_free();
+    _logger.info('后端已释放');
   }
 }

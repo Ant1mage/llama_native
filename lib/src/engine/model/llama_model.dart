@@ -3,15 +3,17 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:ffi/ffi.dart';
 import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
-import 'package:llama_native/src/engine/backend/llama_backend.dart';
 import 'package:llama_native/src/log/logger.dart';
-import 'package:llama_native/src/utils/disposable.dart';
+
 import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
 
 /// Llama 模型配置
 class LlamaModelConfig {
   /// 模型文件路径
   final String modelPath;
+
+  /// GPU层数
+  final int gpuLayers;
 
   /// 仅加载词表 (用于 tokenization 任务)
   final bool vocabOnly;
@@ -24,6 +26,7 @@ class LlamaModelConfig {
 
   const LlamaModelConfig({
     required this.modelPath,
+    this.gpuLayers = 0,
     this.vocabOnly = false,
     this.splitMode = bindings.llama_split_mode.LLAMA_SPLIT_MODE_LAYER,
     this.mainGpu = 0,
@@ -66,11 +69,10 @@ class LlamaModelMetadata {
 /// - GGUF 模型加载与验证
 /// - 内存映射优化 (mmap)
 /// - 模型元数据访问接口
-class LlamaModel with Disposable {
+class LlamaModel {
   final LlamaModelConfig _config;
   final Logger _logger;
   Pointer<bindings.llama_model>? _modelPtr;
-  bool _disposed = false;
 
   /// 私有构造函数
   LlamaModel._(this._config) : _logger = Logger('LlamaModel');
@@ -115,12 +117,12 @@ class LlamaModel with Disposable {
       throw FileSystemException('Failed to access model file', _config.modelPath);
     }
 
-    // 获取后端配置
-    final backend = LlamaBackend.instance;
-    final modelParams = backend.getModelParams();
-
-    // 应用模型特定参数 (简化实现)
-    // split_mode 需要在 backend 中设置
+    // 直接创建模型参数
+    final modelParams = bindings.llama_model_default_params();
+    modelParams.n_gpu_layers = _config.gpuLayers;
+    modelParams.split_modeAsInt = _config.splitMode.value;
+    modelParams.main_gpu = _config.mainGpu;
+    modelParams.vocab_only = _config.vocabOnly;
 
     // 转换为 C 字符串
     final pathC = _config.modelPath.toNativeUtf8().cast<Char>();
@@ -156,7 +158,7 @@ class LlamaModel with Disposable {
 
   /// 获取模型指针
   Pointer<bindings.llama_model> get handle {
-    if (_modelPtr == null || _disposed) {
+    if (_modelPtr == null) {
       throw StateError('Model is disposed');
     }
     return _modelPtr!;
@@ -196,7 +198,7 @@ class LlamaModel with Disposable {
   }
 
   @override
-  bool get isDisposed => _disposed;
+  bool get isDisposed => _modelPtr == null;
 
   /// 估算参数量
   double _estimateParameterCount(int nEmbd, int nLayer, int nVocab) {
@@ -227,7 +229,7 @@ class LlamaModel with Disposable {
 
   /// Tokenize 文本
   List<int> tokenize(String text, {bool addBos = true, bool addEos = false}) {
-    if (_disposed) throw StateError('Model is disposed');
+    if (_modelPtr == null) throw StateError('Model is disposed');
     if (text.isEmpty) return [];
 
     // 必须用 UTF-8 字节长度，Dart String.length 是 UTF-16 码元数，对多字节字符会偏小
@@ -276,7 +278,7 @@ class LlamaModel with Disposable {
 
   /// Detokenize 回文本
   String detokenize(List<int> tokens) {
-    if (_disposed) throw StateError('Model is disposed');
+    if (_modelPtr == null) throw StateError('Model is disposed');
     if (tokens.isEmpty) return '';
 
     _logger.debug('detokenize: tokens=$tokens, vocab address=${vocab.address}');
@@ -324,7 +326,7 @@ class LlamaModel with Disposable {
   }
 
   List<double> embed(List<int> tokens) {
-    if (_disposed) throw StateError('Model is disposed');
+    if (_modelPtr == null) throw StateError('Model is disposed');
     if (tokens.isEmpty) return [];
 
     final nTokens = tokens.length;
@@ -398,18 +400,14 @@ class LlamaModel with Disposable {
     }
   }
 
-  @override
   void dispose() {
-    if (_disposed) return;
+    if (_modelPtr == null) return;
 
     _logger.info('Disposing model...');
 
-    if (_modelPtr != null) {
-      bindings.llama_free_model(_modelPtr!);
-      _modelPtr = null;
-    }
+    bindings.llama_free_model(_modelPtr!);
+    _modelPtr = null;
 
-    _disposed = true;
     _logger.info('Model disposed');
   }
 }

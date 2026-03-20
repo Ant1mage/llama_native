@@ -9,6 +9,7 @@ import 'package:llama_native/src/engine/context/token_generation.dart';
 import 'package:llama_native/src/engine/model/llama_model.dart';
 import 'package:llama_native/src/engine/sampling/sampling_config.dart';
 import 'package:llama_native/src/engine/tokenizer/llama_tokenizer.dart';
+import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
 import 'package:llama_native/src/log/logger.dart';
 
 enum _MessageType {
@@ -69,16 +70,15 @@ class LlamaIsolate {
   ReceivePort? _receivePort;
   StreamSubscription? _subscription;
   final Logger _logger = Logger('LlamaIsolate');
-  bool _isInitialized = false;
   bool _isModelLoaded = false;
   bool _isGenerating = false;
 
-  bool get isInitialized => _isInitialized;
+  bool get isInitialized => _isolate != null && _sendPort != null;
   bool get isModelLoaded => _isModelLoaded;
   bool get isGenerating => _isGenerating;
 
   Future<void> initialize() async {
-    if (_isInitialized) return;
+    if (isInitialized) return;
 
     _receivePort = ReceivePort();
     _isolate = await Isolate.spawn(_isolateEntryPoint, _receivePort!.sendPort, debugName: 'LlamaIsolate');
@@ -87,7 +87,6 @@ class LlamaIsolate {
     _subscription = _receivePort!.listen((message) {
       if (message is SendPort) {
         _sendPort = message;
-        _isInitialized = true;
         completer.complete();
       } else if (message is _IsolateMessage) {
         _handleMessage(message);
@@ -95,7 +94,7 @@ class LlamaIsolate {
     });
 
     await completer.future;
-    _logger.info('LlamaIsolate initialized');
+    _logger.info('LlamaIsolate初始化完成');
   }
 
   void _handleMessage(_IsolateMessage message) {
@@ -111,8 +110,8 @@ class LlamaIsolate {
   }
 
   Future<bool> loadModel(LlamaIsolateConfig config) async {
-    if (!_isInitialized || _sendPort == null) {
-      throw StateError('Isolate not initialized');
+    if (!isInitialized || _sendPort == null) {
+      throw StateError('Isolate未初始化');
     }
 
     final completer = Completer<bool>();
@@ -138,7 +137,7 @@ class LlamaIsolate {
 
   Future<List<int>> tokenize(String text, {bool addBos = false}) async {
     if (!_isModelLoaded || _sendPort == null) {
-      throw StateError('Model not loaded');
+      throw StateError('模型未加载');
     }
 
     final completer = Completer<List<int>>();
@@ -165,7 +164,7 @@ class LlamaIsolate {
 
   Future<String> applyChatTemplate(List<Map<String, String>> messages) async {
     if (!_isModelLoaded || _sendPort == null) {
-      throw StateError('Model not loaded');
+      throw StateError('模型未加载');
     }
 
     final completer = Completer<String>();
@@ -192,7 +191,7 @@ class LlamaIsolate {
 
   Stream<TokenGeneration> generate(List<int> tokens, {int maxTokens = 1024}) async* {
     if (!_isModelLoaded || _sendPort == null) {
-      throw StateError('Model not loaded');
+      throw StateError('模型未加载');
     }
 
     _isGenerating = true;
@@ -313,7 +312,7 @@ class LlamaIsolate {
 
   Future<List<double>> embed(String text) async {
     if (!_isModelLoaded || _sendPort == null) {
-      throw StateError('Model not loaded');
+      throw StateError('模型未加载');
     }
 
     final completer = Completer<List<double>>();
@@ -361,11 +360,10 @@ class LlamaIsolate {
     _sendPort = null;
     _receivePort = null;
     _subscription = null;
-    _isInitialized = false;
     _isModelLoaded = false;
     _isGenerating = false;
 
-    _logger.info('LlamaIsolate disposed');
+    _logger.info('LlamaIsolate已释放');
   }
 
   static void _isolateEntryPoint(SendPort mainSendPort) {
@@ -399,7 +397,7 @@ class LlamaIsolate {
 
           case _MessageType.stop:
             shouldStop = true;
-            logger.debug('Stop signal received');
+            logger.debug('收到停止信号');
             break;
 
           case _MessageType.tokenize:
@@ -454,10 +452,17 @@ class LlamaIsolate {
     final responsePort = data['responsePort'] as SendPort;
 
     try {
-      logger.info('Loading model: ${config.modelPath}');
+      logger.info('加载模型: ${config.modelPath}');
 
-      final model = LlamaModel.load(LlamaModelConfig(modelPath: config.modelPath));
-      logger.info('Model loaded');
+      // 初始化backend（每个isolate都需要调用一次）
+      bindings.llama_backend_init();
+      logger.info('Backend初始化完成');
+
+      // 创建模型配置
+      final modelConfig = LlamaModelConfig(modelPath: config.modelPath, gpuLayers: config.nGpuLayers);
+
+      final model = LlamaModel.load(modelConfig);
+      logger.info('模型加载完成');
 
       final inferenceConfig = InferenceConfig(
         nCtx: config.nCtx,
@@ -469,16 +474,16 @@ class LlamaIsolate {
       );
 
       final context = LlamaContext.create(model, inferenceConfig);
-      logger.info('Context created');
+      logger.info('上下文创建完成');
 
       final chatTokenizer = LlamaTokenizer(model: model);
-      logger.info('ChatTokenizer created');
+      logger.info('ChatTokenizer创建完成');
 
       onSuccess(model, context, chatTokenizer);
 
       responsePort.send(_IsolateMessage(_MessageType.loadModelResult, {'success': true}));
     } catch (e) {
-      logger.error('Failed to load model: $e');
+      logger.error('加载模型失败: $e');
       responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
     }
   }
@@ -494,14 +499,14 @@ class LlamaIsolate {
     final responsePort = data['responsePort'] as SendPort;
 
     try {
-      logger.debug('Generating with ${tokens.length} tokens, max $maxTokens');
+      logger.debug('生成中: ${tokens.length}个Token, 最大$maxTokens个');
 
       context.resetPerformanceMetrics();
 
       final kvStatus = context.kvCacheStatus;
       if (kvStatus.isFull) {
-        logger.error('KV cache is full before generation');
-        responsePort.send(_IsolateMessage(_MessageType.error, 'KV cache full, reset required'));
+        logger.error('生成前KV缓存已满');
+        responsePort.send(_IsolateMessage(_MessageType.error, 'KV缓存已满，需要重置'));
         return;
       }
 
@@ -509,20 +514,20 @@ class LlamaIsolate {
 
       for (var i = 0; i < maxTokens; i++) {
         if (shouldStop()) {
-          logger.debug('Generation stopped by user');
+          logger.debug('用户停止生成');
           responsePort.send(_IsolateMessage(_MessageType.stopped, null));
           return;
         }
 
         final currentKvStatus = context.kvCacheStatus;
         if (currentKvStatus.isFull) {
-          logger.error('KV cache full during generation at step $i');
-          responsePort.send(_IsolateMessage(_MessageType.error, 'KV cache full, generation interrupted'));
+          logger.error('生成过程中KV缓存已满，步骤$i');
+          responsePort.send(_IsolateMessage(_MessageType.error, 'KV缓存已满，生成中断'));
           return;
         }
 
         if (currentKvStatus.isOverSafeThreshold) {
-          logger.warning('KV cache over safe threshold: ${currentKvStatus.usagePercent.toStringAsFixed(1)}%');
+          logger.warning('KV缓存超过安全阈值: ${currentKvStatus.usagePercent.toStringAsFixed(1)}%');
         }
 
         final token = context.sample();
@@ -553,7 +558,7 @@ class LlamaIsolate {
 
       responsePort.send(_IsolateMessage(_MessageType.done, null));
     } catch (e) {
-      logger.error('Generation error: $e');
+      logger.error('生成错误: $e');
       responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
     }
   }
@@ -567,7 +572,7 @@ class LlamaIsolate {
       final tokens = model.tokenize(text, addBos: addBos);
       responsePort.send(_IsolateMessage(_MessageType.tokenizeResult, tokens));
     } catch (e) {
-      logger.error('Tokenize error: $e');
+      logger.error('Tokenize错误: $e');
       responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
     }
   }
@@ -591,11 +596,11 @@ class LlamaIsolate {
       }).toList();
 
       final formattedText = chatTokenizer.applyTemplate(chatMessages);
-      logger.debug('Applied chat template, length: ${formattedText.length}');
+      logger.debug('应用Chat模板，长度: ${formattedText.length}');
 
       responsePort.send(_IsolateMessage(_MessageType.applyChatTemplateResult, formattedText));
     } catch (e) {
-      logger.error('Apply chat template error: $e');
+      logger.error('应用Chat模板错误: $e');
       responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
     }
   }
@@ -606,10 +611,10 @@ class LlamaIsolate {
 
     try {
       context?.setKeepPrefixTokens(tokens);
-      logger.info('Set keep prefix tokens: ${tokens.length}');
+      logger.info('设置保留前缀Token: ${tokens.length}个');
       responsePort.send(_IsolateMessage(_MessageType.setKeepPrefixTokensResult, {'success': true}));
     } catch (e) {
-      logger.error('Set keep prefix tokens error: $e');
+      logger.error('设置保留前缀Token错误: $e');
       responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
     }
   }
@@ -621,7 +626,7 @@ class LlamaIsolate {
       context?.reset();
       responsePort.send(_IsolateMessage(_MessageType.resetResult, null));
     } catch (e) {
-      logger.error('Reset error: $e');
+      logger.error('重置错误: $e');
       responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
     }
   }
@@ -641,7 +646,7 @@ class LlamaIsolate {
       onDisposed();
       responsePort.send(_IsolateMessage(_MessageType.disposeResult, null));
     } catch (e) {
-      logger.error('Dispose error: $e');
+      logger.error('释放错误: $e');
       responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
     }
   }
@@ -665,7 +670,7 @@ class LlamaIsolate {
         }),
       );
     } catch (e) {
-      logger.error('Get performance metrics error: $e');
+      logger.error('获取性能指标错误: $e');
       responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
     }
   }
@@ -676,7 +681,7 @@ class LlamaIsolate {
 
     try {
       if (model == null) {
-        throw StateError('Model not loaded');
+        throw StateError('模型未加载');
       }
 
       final tokens = model.tokenize(text, addBos: true);
@@ -688,7 +693,7 @@ class LlamaIsolate {
       final embedding = model.embed(tokens);
       responsePort.send(_IsolateMessage(_MessageType.embedResult, embedding));
     } catch (e) {
-      logger.error('Embed error: $e');
+      logger.error('嵌入错误: $e');
       responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
     }
   }

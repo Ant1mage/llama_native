@@ -7,7 +7,6 @@ import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
 import 'package:llama_native/src/engine/model/llama_model.dart';
 import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
 import 'package:llama_native/src/log/logger.dart';
-import 'package:llama_native/src/utils/disposable.dart';
 
 enum PoolingType {
   none(0),
@@ -25,7 +24,7 @@ enum PoolingType {
     2 => PoolingType.cls,
     3 => PoolingType.last,
     4 => PoolingType.rank,
-    _ => throw ArgumentError('Unknown PoolingType: $value'),
+    _ => throw ArgumentError('未知的PoolingType: $value'),
   };
 }
 
@@ -38,7 +37,7 @@ class EmbeddingResult {
 
   double similarity(EmbeddingResult other) {
     if (embedding.length != other.embedding.length) {
-      throw ArgumentError('Embedding dimensions do not match');
+      throw ArgumentError('嵌入维度不匹配');
     }
 
     double dotProduct = 0;
@@ -58,7 +57,7 @@ class EmbeddingResult {
   Float32List toFloat32() => Float32List.fromList(embedding);
 
   @override
-  String toString() => 'EmbeddingResult(dim: $embeddingDim, tokens: $tokenCount)';
+  String toString() => 'EmbeddingResult(维度: $embeddingDim, Token数: $tokenCount)';
 }
 
 class EmbeddingsConfig {
@@ -75,13 +74,12 @@ class EmbeddingsConfig {
   });
 }
 
-class LlamaEmbeddings with Disposable {
+class LlamaEmbeddings {
   final LlamaModel _model;
   final EmbeddingsConfig _config;
   final Logger _logger;
 
   Pointer<bindings.llama_context>? _ctx;
-  bool _disposed = false;
 
   LlamaEmbeddings._(this._model, this._config) : _logger = Logger('LlamaEmbeddings');
 
@@ -92,7 +90,7 @@ class LlamaEmbeddings with Disposable {
   }
 
   Future<void> _initialize() async {
-    _logger.info('Initializing embeddings context');
+    _logger.info('初始化嵌入上下文');
 
     final ctxParams = bindings.llama_context_default_params();
     ctxParams.n_ctx = 2048;
@@ -106,27 +104,27 @@ class LlamaEmbeddings with Disposable {
     _ctx = bindings.llama_new_context_with_model(_model.handle, ctxParams);
 
     if (_ctx == null || _ctx == nullptr) {
-      throw LlamaException.context('Failed to create embeddings context');
+      throw LlamaException.context('创建嵌入上下文失败');
     }
 
-    _logger.info('Embeddings context initialized');
+    _logger.info('嵌入上下文初始化完成');
   }
 
   EmbeddingResult embed(String text) {
-    if (_disposed) throw StateError('Embeddings is disposed');
+    if (_ctx == null) throw StateError('嵌入已释放');
 
     final tokens = _tokenize(text);
     return _computeEmbedding(tokens);
   }
 
   List<EmbeddingResult> embedBatch(List<String> texts) {
-    if (_disposed) throw StateError('Embeddings is disposed');
+    if (_ctx == null) throw StateError('嵌入已释放');
 
     return texts.map((text) => embed(text)).toList();
   }
 
   EmbeddingResult embedTokens(List<int> tokens) {
-    if (_disposed) throw StateError('Embeddings is disposed');
+    if (_ctx == null) throw StateError('嵌入已释放');
     return _computeEmbedding(tokens);
   }
 
@@ -138,7 +136,7 @@ class LlamaEmbeddings with Disposable {
       final nTokens = bindings.llama_tokenize(_model.vocab, textC, text.length, tokens, text.length + 2, true, true);
 
       if (nTokens < 0) {
-        throw LlamaException.tokenize('Failed to tokenize text');
+        throw LlamaException.tokenize('文本Token化失败');
       }
 
       return List.generate(nTokens, (i) => tokens[i]);
@@ -150,7 +148,7 @@ class LlamaEmbeddings with Disposable {
 
   EmbeddingResult _computeEmbedding(List<int> tokens) {
     if (tokens.isEmpty) {
-      throw LlamaException.inference('Cannot embed empty text');
+      throw LlamaException.inference('无法嵌入空文本');
     }
 
     final batch = bindings.llama_batch_init(tokens.length, 0, 1);
@@ -170,12 +168,12 @@ class LlamaEmbeddings with Disposable {
 
       final result = bindings.llama_encode(_ctx!, batch);
       if (result != 0) {
-        throw LlamaException.inference('Failed to encode batch');
+        throw LlamaException.inference('编码批次失败');
       }
 
       final embeddingsPtr = bindings.llama_get_embeddings_seq(_ctx!, 0);
       if (embeddingsPtr == nullptr) {
-        throw LlamaException.inference('Failed to get embeddings');
+        throw LlamaException.inference('获取嵌入失败');
       }
 
       final metadata = _model.getMetadata();
@@ -218,20 +216,14 @@ class LlamaEmbeddings with Disposable {
   }
 
   @override
-  bool get isDisposed => _disposed;
-
-  @override
   void dispose() {
-    if (_disposed) return;
+    if (_ctx == null) return;
 
-    _logger.debug('Disposing embeddings context');
+    _logger.debug('释放嵌入上下文');
 
-    if (_ctx != null && _ctx != nullptr) {
-      bindings.llama_free(_ctx!);
-      _ctx = null;
-    }
+    bindings.llama_free(_ctx!);
+    _ctx = null;
 
-    _disposed = true;
-    _logger.info('Embeddings disposed');
+    _logger.info('嵌入已释放');
   }
 }

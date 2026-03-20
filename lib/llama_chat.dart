@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:llama_native/llama_engine.dart';
 import 'package:llama_native/llama_chat_message.dart';
 import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
+import 'package:llama_native/src/log/logger.dart';
 
 export 'package:llama_native/llama_chat_message.dart' show LlamaChatMessage, LlamaMessageRole;
 
@@ -10,6 +11,7 @@ class LlamaChat {
   final LlamaEngine _engine;
   final String _systemPrompt;
   final int _maxTokens;
+  final Logger _logger = Logger('LlamaChat');
 
   final List<LlamaChatMessage> _history = [];
   final _messageController = StreamController<LlamaChatMessage>.broadcast();
@@ -30,11 +32,13 @@ class LlamaChat {
   bool get systemPromptProcessed => _systemPromptProcessed;
 
   void clearHistory() {
+    _logger.debug('清空历史记录');
     _history.clear();
     _systemPromptProcessed = false;
   }
 
   void stop() {
+    _logger.info('停止生成');
     _engine.stop();
   }
 
@@ -43,10 +47,12 @@ class LlamaChat {
       throw StateError('Engine not ready');
     }
 
+    _logger.info('发送消息: ${userMessage.length}字符');
     _history.add(LlamaChatMessage.user(userMessage));
     _messageController.add(_history.last);
 
     if (!_systemPromptProcessed && _systemPrompt.isNotEmpty) {
+      _logger.debug('处理系统提示词');
       final systemOnlyPrompt = await _engine.applyChatTemplate([
         {'role': 'system', 'content': _systemPrompt},
       ]);
@@ -54,6 +60,7 @@ class LlamaChat {
 
       if (_systemPromptTokens.isNotEmpty) {
         await _engine.setKeepPrefixTokens(_systemPromptTokens);
+        _logger.debug('系统提示词Token数: ${_systemPromptTokens.length}');
       }
 
       _systemPromptProcessed = true;
@@ -61,6 +68,7 @@ class LlamaChat {
 
     final prompt = await _buildPrompt();
     final tokens = await _engine.tokenize(prompt, addBos: false);
+    _logger.debug('提示词Token数: ${tokens.length}');
 
     final buffer = StringBuffer();
     try {
@@ -71,6 +79,7 @@ class LlamaChat {
       }
     } on LlamaException catch (e) {
       if (e.type == LlamaErrorType.kvCache) {
+        _logger.warning('KV缓存已满，重置引擎');
         await _engine.reset();
       }
       rethrow;
@@ -79,6 +88,7 @@ class LlamaChat {
     final assistantMessage = buffer.toString();
     _history.add(LlamaChatMessage.assistant(assistantMessage));
     _messageController.add(_history.last);
+    _logger.info('生成完成: ${assistantMessage.length}字符');
   }
 
   Future<String> sendMessageAndWait(String userMessage) async {
@@ -104,12 +114,14 @@ class LlamaChat {
   }
 
   Future<void> reset() async {
+    _logger.info('重置聊天');
     _history.clear();
     _systemPromptProcessed = false;
     await _engine.reset();
   }
 
   void dispose() {
+    _logger.info('释放聊天资源');
     _messageController.close();
   }
 }

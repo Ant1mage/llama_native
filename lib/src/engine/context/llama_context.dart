@@ -4,8 +4,6 @@ import 'dart:convert';
 import 'package:ffi/ffi.dart';
 
 import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
-import 'package:llama_native/src/engine/backend/llama_backend.dart';
-import 'package:llama_native/src/engine/backend/llama_backend_config.dart';
 import 'package:llama_native/src/engine/model/llama_model.dart';
 import 'package:llama_native/src/engine/context/inference_config.dart';
 import 'package:llama_native/src/engine/context/performance_metrics.dart';
@@ -13,10 +11,10 @@ import 'package:llama_native/src/engine/context/token_generation.dart';
 import 'package:llama_native/src/engine/sampling/sampling_config.dart';
 import 'package:llama_native/src/engine/cache/kv_cache_manager.dart';
 import 'package:llama_native/src/log/logger.dart';
-import 'package:llama_native/src/utils/disposable.dart';
+
 import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
 
-class LlamaContext with Disposable {
+class LlamaContext {
   final LlamaModel _model;
   final InferenceConfig _config;
   final Logger _logger;
@@ -25,9 +23,7 @@ class LlamaContext with Disposable {
   Pointer<bindings.llama_sampler>? _samplerChain;
   Pointer<bindings.llama_sampler>? _grammarSampler;
   KVCacheManager? _kvCache;
-  bool _disposed = false;
   int _nPast = 0;
-  List<int> _keepPrefixTokens = [];
   final List<int> _prevTokens = [];
   int _nPrev = 64;
 
@@ -48,14 +44,14 @@ class LlamaContext with Disposable {
       'Creating context: n_ctx=${_config.nCtx}, n_batch=${_config.nBatch}, n_gpu_layers=${_config.nGpuLayers}',
     );
 
-    final backend = LlamaBackend.createWithConfig(LlamaBackendConfig.forGpuLayers(_config.nGpuLayers));
-
-    final ctxParams = backend.getContextParams(
-      nCtx: _config.nCtx,
-      nBatch: _config.nBatch,
-      nUBatch: _config.nUBatch,
-      nThreads: _config.nThreads,
-    );
+    // 直接创建context参数
+    final ctxParams = bindings.llama_context_default_params();
+    ctxParams.n_ctx = _config.nCtx;
+    ctxParams.n_batch = _config.nBatch;
+    ctxParams.n_ubatch = _config.nUBatch;
+    ctxParams.n_threads = _config.nThreads;
+    ctxParams.n_seq_max = 1;
+    ctxParams.embeddings = false;
 
     final ptr = bindings.llama_init_from_model(_model.handle, ctxParams);
     if (ptr == nullptr) {
@@ -264,7 +260,7 @@ class LlamaContext with Disposable {
   }
 
   Pointer<bindings.llama_context> get handle {
-    if (_ctxPtr == null || _disposed) {
+    if (_ctxPtr == null) {
       throw StateError('Context is disposed');
     }
     return _ctxPtr!;
@@ -279,20 +275,17 @@ class LlamaContext with Disposable {
 
   int get nPast => _nPast;
 
-  @override
-  bool get isDisposed => _disposed;
-
   LlamaModel get model => _model;
 
   Pointer<bindings.llama_sampler> get sampler {
-    if (_samplerChain == null || _disposed) {
+    if (_samplerChain == null) {
       throw StateError('Context is disposed');
     }
     return _samplerChain!;
   }
 
   void decode(List<int> tokens) {
-    if (_disposed) throw StateError('Context is disposed');
+    if (_ctxPtr == null) throw StateError('Context is disposed');
     if (tokens.isEmpty) return;
 
     final nTokens = tokens.length;
@@ -348,7 +341,7 @@ class LlamaContext with Disposable {
   }
 
   int sample({bool grammarFirst = false}) {
-    if (_disposed) throw StateError('Context is disposed');
+    if (_ctxPtr == null) throw StateError('Context is disposed');
 
     bindings.llama_synchronize(_ctxPtr!);
 
@@ -430,7 +423,7 @@ class LlamaContext with Disposable {
   }
 
   void decodeOne(int token) {
-    if (_disposed) throw StateError('Context is disposed');
+    if (_ctxPtr == null) throw StateError('Context is disposed');
 
     final pos = _kvCache?.allocatePositions(1) ?? _nPast;
     final batch = bindings.llama_batch_init(1, 0, 1);
@@ -454,7 +447,6 @@ class LlamaContext with Disposable {
   }
 
   void setKeepPrefixTokens(List<int> tokens) {
-    _keepPrefixTokens = List.from(tokens);
     _kvCache?.setKeepPrefix(tokens.length);
     _logger.info('Set keep prefix to ${tokens.length} tokens');
   }
@@ -498,7 +490,7 @@ class LlamaContext with Disposable {
   }
 
   PerformanceMetrics get performanceMetrics {
-    if (_ctxPtr == null || _disposed) {
+    if (_ctxPtr == null) {
       return PerformanceMetrics.empty();
     }
 
@@ -529,15 +521,14 @@ class LlamaContext with Disposable {
   }
 
   Pointer<bindings.llama_context> get ctxPtr {
-    if (_ctxPtr == null || _disposed) {
+    if (_ctxPtr == null) {
       throw StateError('Context is disposed');
     }
     return _ctxPtr!;
   }
 
-  @override
   void dispose() {
-    if (_disposed) return;
+    if (_ctxPtr == null) return;
 
     _logger.info('Disposing context...');
 
@@ -551,14 +542,11 @@ class LlamaContext with Disposable {
       _samplerChain = null;
     }
 
-    if (_ctxPtr != null) {
-      bindings.llama_free(_ctxPtr!);
-      _ctxPtr = null;
-    }
+    bindings.llama_free(_ctxPtr!);
+    _ctxPtr = null;
 
     _kvCache?.dispose();
     _kvCache = null;
-    _disposed = true;
 
     _logger.info('Context disposed');
   }

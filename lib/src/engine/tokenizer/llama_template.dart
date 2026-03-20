@@ -4,38 +4,20 @@ import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
 import 'package:llama_native/llama_chat_message.dart';
 import 'package:llama_native/src/log/logger.dart';
 
-/// Chat Template 类型
 enum LlamaTemplateType {
-  /// Llama3 格式
   llama3,
-
-  /// Qwen 格式
   qwen,
-
-  /// Mistral 格式
   mistral,
-
-  /// ChatML 格式
   chatml,
-
-  /// Alpaca 格式
   alpaca,
-
-  /// Gemma 格式
   gemma,
-
-  /// MiniCPM 格式
   minicpm,
-
-  /// 未知格式 (使用默认)
   unknown,
 }
 
-/// Chat Template 应用器
 class LlamaTemplate {
   final Logger _logger = Logger('LlamaTemplate');
 
-  /// 应用原生模板（使用 llama_chat_apply_template）
   String applyNative(List<LlamaChatMessage> messages, {String? template}) {
     Pointer<bindings.llama_chat_message>? chatMessages;
     Pointer<Char>? tmplPtr;
@@ -79,17 +61,17 @@ class LlamaTemplate {
 
         if (result > 0) {
           final formattedText = buffer.cast<Utf8>().toDartString(length: result);
-          _logger.debug('Applied native template, length=$result');
+          _logger.debug('应用原生模板，长度=$result');
           return formattedText;
         } else {
-          _logger.error('Failed to apply template, result: $result');
+          _logger.error('应用模板失败，结果: $result');
           return applyFallback(messages, LlamaTemplateType.chatml);
         }
       } finally {
         calloc.free(buffer);
       }
     } catch (e) {
-      _logger.error('Native template application failed: $e');
+      _logger.error('原生模板应用失败: $e');
       return applyFallback(messages, LlamaTemplateType.chatml);
     } finally {
       if (chatMessages != null) {
@@ -101,7 +83,6 @@ class LlamaTemplate {
     }
   }
 
-  /// 应用回退模板
   String applyFallback(List<LlamaChatMessage> messages, LlamaTemplateType type) {
     switch (type) {
       case LlamaTemplateType.llama3:
@@ -123,7 +104,6 @@ class LlamaTemplate {
     }
   }
 
-  /// 转换为原生 llama_chat_message 数组
   Pointer<bindings.llama_chat_message> _toNativeChatMessages(List<LlamaChatMessage> messages) {
     final chatMessages = calloc<bindings.llama_chat_message>(messages.length);
 
@@ -137,7 +117,6 @@ class LlamaTemplate {
     return chatMessages;
   }
 
-  /// 释放聊天消息内存
   void _freeChatMessages(Pointer<bindings.llama_chat_message> messages, int length) {
     for (var i = 0; i < length; i++) {
       final msg = messages.elementAt(i).ref;

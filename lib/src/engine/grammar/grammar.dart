@@ -4,23 +4,12 @@ import 'package:ffi/ffi.dart';
 import 'package:llama_native/src/llama_native_bindings.dart' as bindings;
 import 'package:llama_native/src/engine/grammar/json_schema_to_gbnf.dart';
 import 'package:llama_native/src/log/logger.dart';
-import 'package:llama_native/src/utils/disposable.dart';
 
-/// Grammar 配置
 class GrammarConfig {
-  /// GBNF grammar 字符串
   final String grammarStr;
-
-  /// 根规则名称
   final String rootRule;
-
-  /// 是否使用懒加载模式
   final bool lazy;
-
-  /// 触发词列表（懒加载模式）
   final List<String> triggerWords;
-
-  /// 触发 token 列表（懒加载模式）
   final List<int> triggerTokens;
 
   const GrammarConfig({
@@ -31,7 +20,6 @@ class GrammarConfig {
     this.triggerTokens = const [],
   });
 
-  /// 从 JSON Schema 创建配置
   factory GrammarConfig.fromJsonSchema(
     Map<String, dynamic> schema, {
     String rootRule = 'root',
@@ -50,43 +38,37 @@ class GrammarConfig {
   }
 }
 
-/// Grammar 解析结果
 class GrammarParseResult {
-  /// 原始字符串
   final String rawString;
 
   GrammarParseResult(this.rawString);
 
-  /// 解析为 Map
   Map<String, dynamic> toMap() {
     try {
       final decoded = jsonDecode(rawString);
       return decoded as Map<String, dynamic>;
     } catch (e) {
-      throw FormatException('Failed to parse grammar result as JSON: $e');
+      throw FormatException('解析Grammar结果为JSON失败: $e');
     }
   }
 
-  /// 解析为 List
   List<dynamic> toList() {
     try {
       final decoded = jsonDecode(rawString);
       return decoded as List<dynamic>;
     } catch (e) {
-      throw FormatException('Failed to parse grammar result as JSON: $e');
+      throw FormatException('解析Grammar结果为JSON失败: $e');
     }
   }
 
-  /// 解析为动态类型
   dynamic toDynamic() {
     try {
       return jsonDecode(rawString);
     } catch (e) {
-      throw FormatException('Failed to parse grammar result as JSON: $e');
+      throw FormatException('解析Grammar结果为JSON失败: $e');
     }
   }
 
-  /// 尝试解析，失败返回 null
   Map<String, dynamic>? tryToMap() {
     try {
       return toMap();
@@ -99,30 +81,21 @@ class GrammarParseResult {
   String toString() => rawString;
 }
 
-/// GBNF Grammar 包装器
-///
-/// 提供：
-/// - JSON Schema 到 GBNF 的转换
-/// - Grammar sampler 的创建和管理
-/// - 结果解析
-class Grammar with Disposable {
+class Grammar {
   final GrammarConfig _config;
   final Pointer<bindings.llama_vocab> _vocab;
   final Logger _logger;
 
   Pointer<bindings.llama_sampler>? _sampler;
-  bool _disposed = false;
 
   Grammar._(this._config, this._vocab) : _logger = Logger('Grammar');
 
-  /// 从配置创建 Grammar
   factory Grammar.create(GrammarConfig config, Pointer<bindings.llama_vocab> vocab) {
     final grammar = Grammar._(config, vocab);
     grammar._initialize();
     return grammar;
   }
 
-  /// 从 JSON Schema 创建 Grammar
   factory Grammar.fromJsonSchema(
     Map<String, dynamic> schema,
     Pointer<bindings.llama_vocab> vocab, {
@@ -141,9 +114,8 @@ class Grammar with Disposable {
     return Grammar.create(config, vocab);
   }
 
-  /// 初始化 grammar sampler
   void _initialize() {
-    _logger.debug('Initializing grammar with root rule: ${_config.rootRule}');
+    _logger.debug('初始化Grammar，根规则: ${_config.rootRule}');
 
     final grammarStrC = _config.grammarStr.toNativeUtf8().cast<Char>();
     final rootRuleC = _config.rootRule.toNativeUtf8().cast<Char>();
@@ -156,12 +128,12 @@ class Grammar with Disposable {
       }
 
       if (_sampler == null || _sampler == nullptr) {
-        throw StateError('Failed to create grammar sampler');
+        throw StateError('创建Grammar采样器失败');
       }
 
-      _logger.info('Grammar sampler initialized successfully');
+      _logger.info('Grammar采样器初始化成功');
     } catch (e) {
-      _logger.error('Failed to initialize grammar: $e');
+      _logger.error('初始化Grammar失败: $e');
       rethrow;
     } finally {
       calloc.free(grammarStrC);
@@ -169,7 +141,6 @@ class Grammar with Disposable {
     }
   }
 
-  /// 创建懒加载 grammar sampler
   Pointer<bindings.llama_sampler> _createLazySampler(Pointer<Char> grammarStrC, Pointer<Char> rootRuleC) {
     Pointer<Pointer<Char>>? triggerWordsPtr;
     Pointer<bindings.llama_token>? triggerTokensPtr;
@@ -211,74 +182,55 @@ class Grammar with Disposable {
     }
   }
 
-  /// 获取 sampler 指针
   Pointer<bindings.llama_sampler> get sampler {
-    if (_disposed || _sampler == null) {
+    if (_sampler == null) {
       throw StateError('Grammar is disposed');
     }
     return _sampler!;
   }
 
-  /// 获取 grammar 字符串
   String get grammarString => _config.grammarStr;
-
-  /// 获取根规则名称
   String get rootRule => _config.rootRule;
 
-  /// 解析生成的文本
   GrammarParseResult parse(String text) {
     return GrammarParseResult(text);
   }
 
-  /// 重置 grammar 状态
   void reset() {
     if (_sampler != null && _sampler != nullptr) {
       bindings.llama_sampler_reset(_sampler!);
-      _logger.debug('Grammar sampler reset');
+      _logger.debug('Grammar采样器已重置');
     }
   }
 
-  @override
-  bool get isDisposed => _disposed;
-
-  @override
   void dispose() {
-    if (_disposed) return;
+    if (_sampler == null) return;
 
-    _logger.debug('Disposing grammar...');
+    _logger.debug('释放Grammar...');
 
-    if (_sampler != null && _sampler != nullptr) {
-      bindings.llama_sampler_free(_sampler!);
-      _sampler = null;
-    }
+    bindings.llama_sampler_free(_sampler!);
+    _sampler = null;
 
-    _disposed = true;
-    _logger.debug('Grammar disposed');
+    _logger.debug('Grammar已释放');
   }
 }
 
-/// JSON Schema 构建器
-///
-/// 提供流畅的 API 来构建 JSON Schema
 class JsonSchemaBuilder {
   final Map<String, dynamic> _schema = {};
 
   JsonSchemaBuilder();
 
-  /// 设置类型
   JsonSchemaBuilder type(String type) {
     _schema['type'] = type;
     return this;
   }
 
-  /// 添加属性
   JsonSchemaBuilder property(String name, Map<String, dynamic> propertySchema) {
     _schema['properties'] ??= <String, dynamic>{};
     (_schema['properties'] as Map<String, dynamic>)[name] = propertySchema;
     return this;
   }
 
-  /// 添加字符串属性
   JsonSchemaBuilder stringProperty(
     String name, {
     String? description,
@@ -298,7 +250,6 @@ class JsonSchemaBuilder {
     return property(name, prop);
   }
 
-  /// 添加数字属性
   JsonSchemaBuilder numberProperty(
     String name, {
     String? description,
@@ -313,14 +264,12 @@ class JsonSchemaBuilder {
     return property(name, prop);
   }
 
-  /// 添加布尔属性
   JsonSchemaBuilder booleanProperty(String name, {String? description}) {
     final prop = <String, dynamic>{'type': 'boolean'};
     if (description != null) prop['description'] = description;
     return property(name, prop);
   }
 
-  /// 添加数组属性
   JsonSchemaBuilder arrayProperty(String name, {Map<String, dynamic>? items, int? minItems, int? maxItems}) {
     final prop = <String, dynamic>{'type': 'array'};
     if (items != null) prop['items'] = items;
@@ -329,7 +278,6 @@ class JsonSchemaBuilder {
     return property(name, prop);
   }
 
-  /// 添加对象属性
   JsonSchemaBuilder objectProperty(String name, {Map<String, dynamic>? properties, List<String>? required}) {
     final prop = <String, dynamic>{'type': 'object'};
     if (properties != null) prop['properties'] = properties;
@@ -337,37 +285,31 @@ class JsonSchemaBuilder {
     return property(name, prop);
   }
 
-  /// 设置必需属性
   JsonSchemaBuilder required(List<String> properties) {
     _schema['required'] = properties;
     return this;
   }
 
-  /// 添加枚举约束
   JsonSchemaBuilder enumValues(List<dynamic> values) {
     _schema['enum'] = values;
     return this;
   }
 
-  /// 设置描述
   JsonSchemaBuilder description(String desc) {
     _schema['description'] = desc;
     return this;
   }
 
-  /// 添加 oneOf 约束
   JsonSchemaBuilder oneOf(List<Map<String, dynamic>> schemas) {
     _schema['oneOf'] = schemas;
     return this;
   }
 
-  /// 添加 anyOf 约束
   JsonSchemaBuilder anyOf(List<Map<String, dynamic>> schemas) {
     _schema['anyOf'] = schemas;
     return this;
   }
 
-  /// 构建最终的 schema
   Map<String, dynamic> build() {
     return Map.unmodifiable(_schema);
   }
