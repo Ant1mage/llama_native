@@ -41,7 +41,7 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
-          tar -czvf llama_macos_arm64.tar.gz -C output .
+          tar -czvf macos-arm64.tar.gz -C output .
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
@@ -52,7 +52,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-macos-x64:
+  build-macos-x86_64:
     name: Build macOS x86_64
     runs-on: macos-latest
     timeout-minutes: 45
@@ -87,7 +87,7 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
-          tar -czvf llama_macos_x64.tar.gz -C output .
+          tar -czvf macos-x86_64.tar.gz -C output .
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
@@ -98,8 +98,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-ios-device:
-    name: Build iOS Device (arm64)
+  build-ios-arm64:
+    name: Build iOS ARM64
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -135,7 +135,7 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
-          tar -czvf llama_ios_device.tar.gz -C output .
+          tar -czvf ios-arm64.tar.gz -C output .
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
@@ -184,7 +184,7 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
-          tar -czvf llama_ios_simulator_arm64.tar.gz -C output .
+          tar -czvf ios-simulator-arm64.tar.gz -C output .
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
@@ -195,7 +195,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-ios-simulator-x64:
+  build-ios-simulator-x86_64:
     name: Build iOS Simulator x86_64
     runs-on: macos-latest
     timeout-minutes: 45
@@ -233,7 +233,7 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin -name "*.dylib" -exec cp {} output/ \;
-          tar -czvf llama_ios_simulator_x64.tar.gz -C output .
+          tar -czvf ios-simulator-x86_64.tar.gz -C output .
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
@@ -284,7 +284,7 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin -name "*.so" -exec cp {} output/ \;
-          tar -czvf llama_android_arm64.tar.gz -C output .
+          tar -czvf android-arm64.tar.gz -C output .
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
@@ -295,7 +295,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-android-x64:
+  build-android-x86_64:
     name: Build Android x86_64
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -335,7 +335,7 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin -name "*.so" -exec cp {} output/ \;
-          tar -czvf llama_android_x64.tar.gz -C output .
+          tar -czvf android-x86_64.tar.gz -C output .
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
@@ -346,7 +346,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-linux:
+  build-linux-x86_64:
     name: Build Linux x86_64
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -386,7 +386,7 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin -name "*.so" -exec cp {} output/ \;
-          tar -czvf llama_linux_x64.tar.gz -C output .
+          tar -czvf linux-x86_64.tar.gz -C output .
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
@@ -397,7 +397,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-windows:
+  build-windows-x86_64:
     name: Build Windows x86_64
     runs-on: windows-latest
     timeout-minutes: 30
@@ -438,7 +438,7 @@ jobs:
         run: |
           mkdir -p output
           find llama.cpp/build/bin/Release -name "*.dll" -exec cp {} output/ \;
-          tar -czvf llama_windows_x64.tar.gz -C output .
+          tar -czvf windows-x86_64.tar.gz -C output .
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2

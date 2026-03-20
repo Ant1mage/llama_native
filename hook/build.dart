@@ -15,7 +15,7 @@ class PlatformConfig {
     if (lowerArch == 'arm64' || lowerArch == 'aarch64') {
       return 'arm64';
     } else if (lowerArch == 'x86_64' || lowerArch == 'x64' || lowerArch == 'amd64') {
-      return 'x64';
+      return 'x86_64';
     } else if (lowerArch == 'arm' || lowerArch == 'armeabi-v7a' || lowerArch == 'armv7') {
       return 'arm';
     }
@@ -24,35 +24,23 @@ class PlatformConfig {
 
   String get platformDisplayName {
     if (os == 'ios' && isSimulator) {
-      return 'ios_simulator_$normalizedArch';
+      return 'ios-simulator-$normalizedArch';
     }
-    return '${os}_$normalizedArch';
+    return '$os-$normalizedArch';
   }
 
   String get dirName {
     if (os == 'ios' && isSimulator) {
-      return 'ios_simulator_$normalizedArch';
+      return 'ios-simulator-$normalizedArch';
     }
-    return '${os}_$normalizedArch';
+    return '$os-$normalizedArch';
   }
 
   String get artifactName {
-    if (os == 'ios') {
-      if (isSimulator) {
-        return 'llama_ios_simulator_$normalizedArch.tar.gz';
-      } else {
-        return 'llama_ios_device.tar.gz';
-      }
-    } else if (os == 'macos') {
-      return 'llama_macos_$normalizedArch.tar.gz';
-    } else if (os == 'android') {
-      return 'llama_android_$normalizedArch.tar.gz';
-    } else if (os == 'linux') {
-      return 'llama_linux_$normalizedArch.tar.gz';
-    } else if (os == 'windows') {
-      return 'llama_windows_$normalizedArch.tar.gz';
+    if (os == 'ios' && isSimulator) {
+      return 'ios-simulator-$normalizedArch.tar.gz';
     }
-    throw UnsupportedError('Unsupported platform: $os');
+    return '$os-$normalizedArch.tar.gz';
   }
 }
 
