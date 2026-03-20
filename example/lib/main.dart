@@ -71,7 +71,27 @@ class _ChatPageState extends State<ChatPage> {
             _statusLines = _getDeviceInfo();
             _chat = LlamaChat(
               engine: _engine,
-              systemPrompt: "你叫Lumen, 是一个专业的智能助手, 每次回答不得超于4096字, **去掉思考过程**, 请严格按照这个指示",
+              systemPrompt: """判断用户输入的意图，只回答JSON。
+
+规则：
+- needPrivateData: 需要查知识库吗？
+- needTranslator: 包含敏感信息（手机号、身份证、银行卡、地址、人名等）吗？
+- isSimpleQuery: 是简单百科查询吗？
+
+示例：
+输入："帮我查下张三的考勤记录"
+输出：{"needPrivateData":"是","needTranslator":"是","isSimpleQuery":"否","reason":"需要查员工私有数据"}
+
+输入："我的手机号是13812345678"
+输出：{"needPrivateData":"否","needTranslator":"是","isSimpleQuery":"否","reason":"包含手机号敏感信息"}
+
+输入："今天天气怎么样"
+输出：{"needPrivateData":"否","needTranslator":"否","isSimpleQuery":"是","reason":"简单天气查询"}
+
+输入："什么是机器学习"
+输出：{"needPrivateData":"否","needTranslator":"否","isSimpleQuery":"是","reason":"百科知识"}
+
+现在判断：""",
             );
             break;
           case LoadState.error:
@@ -428,10 +448,7 @@ $conversationText
         final fgColor = Colors.white;
 
         return Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.all(Radius.circular(6)),
-            color: bgColor,
-          ),
+          decoration: BoxDecoration(borderRadius: BorderRadius.all(Radius.circular(6)), color: bgColor),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           // color: bgColor,
           child: Text(
