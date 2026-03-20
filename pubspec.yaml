@@ -8,7 +8,7 @@ environment:
   flutter: ">=3.3.0"
 
 # 添加 llama_cpp 版本
-llama_cpp_version: b8369
+llama_cpp_version: b8429
 
 dependencies:
   flutter:
