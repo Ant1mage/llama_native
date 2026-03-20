@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:llama_native/src/llama_isolate.dart';
 import 'package:llama_native/src/engine/context/token_generation.dart';
 import 'package:llama_native/src/engine/context/performance_metrics.dart';
+import 'package:llama_native/src/engine/sampling/sampling_config.dart';
 import 'package:llama_native/src/utils/platform_info.dart';
 
 enum LoadState { idle, initializing, loading, ready, error }
@@ -27,7 +28,7 @@ class LlamaEngine {
   Stream<LoadState> get onStateChange => _stateController.stream;
   Stream<LoadProgress> get onProgress => _progressController.stream;
 
-  Future<bool> load(String modelPath) async {
+  Future<bool> load(String modelPath, {Map<String, dynamic>? config}) async {
     if (_state == LoadState.loading || _state == LoadState.ready) {
       return _state == LoadState.ready;
     }
@@ -42,26 +43,34 @@ class LlamaEngine {
 
       _setProgress(LoadProgress.allocatingMemory);
 
-      final gpuLayers = PlatformInfo.recommendedGpuLayers();
-      final nCtx = PlatformInfo.recommendedContextLength();
-      final nThreads = PlatformInfo.recommendedThreads();
-      final nBatch = PlatformInfo.recommendedBatchSize();
-      final nUBatch = PlatformInfo.recommendedUBatchSize();
+      final nCtx = config?['contextLength'] as int? ?? PlatformInfo.recommendedContextLength();
+      final nGpuLayers = config?['gpuLayers'] as int? ?? PlatformInfo.recommendedGpuLayers();
+      final nThreads = config?['threads'] as int? ?? PlatformInfo.recommendedThreads();
+      final nBatch = config?['batchSize'] as int? ?? PlatformInfo.recommendedBatchSize();
+      final nUBatch = config?['uBatchSize'] as int? ?? PlatformInfo.recommendedUBatchSize();
+
+      final samplingMap = config?['sampling'] as Map<String, dynamic>?;
+      final sampling = SamplingConfig(
+        temperature: samplingMap?['temperature'] as double? ?? 0.8,
+        topK: samplingMap?['topK'] as int? ?? 40,
+        topP: samplingMap?['topP'] as double? ?? 0.95,
+      );
 
       _setProgress(LoadProgress.loadingModel);
 
-      final config = LlamaIsolateConfig(
+      final isolateConfig = LlamaIsolateConfig(
         modelPath: modelPath,
         nCtx: nCtx,
         nBatch: nBatch,
         nUBatch: nUBatch,
         nThreads: nThreads,
-        nGpuLayers: gpuLayers,
+        nGpuLayers: nGpuLayers,
+        sampling: sampling,
       );
 
       _setProgress(LoadProgress.creatingContext);
 
-      final success = await _isolate!.loadModel(config);
+      final success = await _isolate!.loadModel(isolateConfig);
 
       if (success) {
         _setProgress(LoadProgress.ready);
