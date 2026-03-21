@@ -6,6 +6,7 @@ import 'package:llama_native/src/engine/context/performance_metrics.dart';
 import 'package:llama_native/src/engine/sampling/sampling_config.dart';
 import 'package:llama_native/src/utils/platform_info.dart';
 import 'package:llama_native/src/log/logger.dart';
+import 'package:llama_native/llama_native.dart';
 
 enum LoadState { idle, initializing, loading, ready, error }
 
@@ -18,6 +19,12 @@ class LlamaEngine {
   String? _error;
   String? _modelPath;
 
+  KVCacheThresholdCallback? _onNearThreshold;
+  KVCacheThresholdCallback? _onEmergency;
+  KVCacheResetCallback? _onFullReset;
+
+  double _lastKvUsagePercent = 0.0;
+
   final _stateController = StreamController<LoadState>.broadcast();
   final _progressController = StreamController<LoadProgress>.broadcast();
 
@@ -26,6 +33,7 @@ class LlamaEngine {
   String? get modelPath => _modelPath;
   bool get isReady => _state == LoadState.ready;
   bool get isGenerating => _isolate?.isGenerating ?? false;
+  double get kvCacheUsagePercent => _lastKvUsagePercent;
 
   Stream<LoadState> get onStateChange => _stateController.stream;
   Stream<LoadProgress> get onProgress => _progressController.stream;
@@ -119,7 +127,29 @@ class LlamaEngine {
       throw StateError('Engine not ready');
     }
     _logger.debug('生成Token: ${tokens.length}个, 最大$maxTokens个');
-    return _isolate!.generate(tokens, maxTokens: maxTokens);
+
+    return _isolate!.generate(tokens, maxTokens: maxTokens).map((gen) {
+      _lastKvUsagePercent = gen.kvUsagePercent;
+
+      if (gen.kvUsagePercent >= 80 && _onEmergency != null) {
+        _onEmergency!(gen.kvUsagePercent);
+      } else if (gen.kvUsagePercent >= 75 && _onNearThreshold != null) {
+        _onNearThreshold!(gen.kvUsagePercent);
+      }
+
+      return gen;
+    });
+  }
+
+  void setKVCacheCallbacks({
+    KVCacheThresholdCallback? onNearThreshold,
+    KVCacheThresholdCallback? onEmergency,
+    KVCacheResetCallback? onFullReset,
+  }) {
+    _onNearThreshold = onNearThreshold;
+    _onEmergency = onEmergency;
+    _onFullReset = onFullReset;
+    _logger.debug('KV Cache 回调已设置');
   }
 
   void stop() {
@@ -140,6 +170,7 @@ class LlamaEngine {
     if (_isolate != null && _isolate!.isModelLoaded) {
       _logger.info('重置引擎');
       await _isolate!.reset();
+      _onFullReset?.call();
     }
   }
 
@@ -163,6 +194,35 @@ class LlamaEngine {
     }
     _logger.debug('生成嵌入向量: ${text.length}字符');
     return _isolate!.embed(text);
+  }
+
+  Future<void> pauseKVCache() async {
+    if (_isolate != null && _isolate!.isModelLoaded) {
+      _logger.info('暂停 KV Cache');
+      await _isolate!.pauseKVCache();
+    }
+  }
+
+  Future<void> resumeKVCache() async {
+    if (_isolate != null && _isolate!.isModelLoaded) {
+      _logger.info('恢复 KV Cache');
+      await _isolate!.resumeKVCache();
+    }
+  }
+
+  Future<void> injectContextTokens(List<int> tokens) async {
+    if (_isolate != null && _isolate!.isModelLoaded) {
+      _logger.info('注入上下文 Token: ${tokens.length} 个');
+      await _isolate!.injectContextTokens(tokens);
+    }
+  }
+
+  Future<void> injectContextText(String text) async {
+    if (!isReady || _isolate == null) {
+      throw StateError('Engine not ready');
+    }
+    final tokens = await tokenize(text, addBos: true);
+    await injectContextTokens(tokens);
   }
 
   Future<void> dispose() async {

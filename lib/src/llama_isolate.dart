@@ -35,6 +35,14 @@ enum _MessageType {
   performanceMetricsResult,
   embed,
   embedResult,
+  pauseKVCache,
+  pauseKVCacheResult,
+  resumeKVCache,
+  resumeKVCacheResult,
+  prepareForSnapshot,
+  prepareForSnapshotResult,
+  injectContextTokens,
+  injectContextTokensResult,
 }
 
 class _IsolateMessage {
@@ -335,6 +343,62 @@ class LlamaIsolate {
     return completer.future;
   }
 
+  Future<void> pauseKVCache() async {
+    if (!_isModelLoaded || _sendPort == null) return;
+
+    final completer = Completer<void>();
+    final responsePort = ReceivePort();
+
+    _sendPort!.send(_IsolateMessage(_MessageType.pauseKVCache, {'responsePort': responsePort.sendPort}));
+
+    responsePort.listen((message) {
+      if (message is _IsolateMessage && message.type == _MessageType.pauseKVCacheResult) {
+        completer.complete();
+        responsePort.close();
+      }
+    });
+
+    return completer.future;
+  }
+
+  Future<void> resumeKVCache() async {
+    if (!_isModelLoaded || _sendPort == null) return;
+
+    final completer = Completer<void>();
+    final responsePort = ReceivePort();
+
+    _sendPort!.send(_IsolateMessage(_MessageType.resumeKVCache, {'responsePort': responsePort.sendPort}));
+
+    responsePort.listen((message) {
+      if (message is _IsolateMessage && message.type == _MessageType.resumeKVCacheResult) {
+        completer.complete();
+        responsePort.close();
+      }
+    });
+
+    return completer.future;
+  }
+
+  Future<void> injectContextTokens(List<int> tokens) async {
+    if (!_isModelLoaded || _sendPort == null) return;
+
+    final completer = Completer<void>();
+    final responsePort = ReceivePort();
+
+    _sendPort!.send(
+      _IsolateMessage(_MessageType.injectContextTokens, {'tokens': tokens, 'responsePort': responsePort.sendPort}),
+    );
+
+    responsePort.listen((message) {
+      if (message is _IsolateMessage && message.type == _MessageType.injectContextTokensResult) {
+        completer.complete();
+        responsePort.close();
+      }
+    });
+
+    return completer.future;
+  }
+
   Future<void> dispose() async {
     if (_sendPort != null) {
       final completer = Completer<void>();
@@ -434,6 +498,18 @@ class LlamaIsolate {
 
           case _MessageType.embed:
             _handleEmbed(message.data, model, logger);
+            break;
+
+          case _MessageType.pauseKVCache:
+            _handlePauseKVCache(message.data, context, logger);
+            break;
+
+          case _MessageType.resumeKVCache:
+            _handleResumeKVCache(message.data, context, logger);
+            break;
+
+          case _MessageType.injectContextTokens:
+            _handleInjectContextTokens(message.data, context, logger);
             break;
 
           default:
@@ -694,6 +770,46 @@ class LlamaIsolate {
       responsePort.send(_IsolateMessage(_MessageType.embedResult, embedding));
     } catch (e) {
       logger.error('嵌入错误: $e');
+      responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
+    }
+  }
+
+  static void _handlePauseKVCache(Map<String, dynamic> data, LlamaContext? context, Logger logger) {
+    final responsePort = data['responsePort'] as SendPort;
+
+    try {
+      context?.pauseKVCache();
+      logger.info('KV Cache 已暂停');
+      responsePort.send(_IsolateMessage(_MessageType.pauseKVCacheResult, {'success': true}));
+    } catch (e) {
+      logger.error('暂停 KV Cache 错误: $e');
+      responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
+    }
+  }
+
+  static void _handleResumeKVCache(Map<String, dynamic> data, LlamaContext? context, Logger logger) {
+    final responsePort = data['responsePort'] as SendPort;
+
+    try {
+      context?.resumeKVCache();
+      logger.info('KV Cache 已恢复');
+      responsePort.send(_IsolateMessage(_MessageType.resumeKVCacheResult, {'success': true}));
+    } catch (e) {
+      logger.error('恢复 KV Cache 错误: $e');
+      responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
+    }
+  }
+
+  static void _handleInjectContextTokens(Map<String, dynamic> data, LlamaContext? context, Logger logger) {
+    final responsePort = data['responsePort'] as SendPort;
+    final tokens = List<int>.from(data['tokens'] as List);
+
+    try {
+      context?.injectContextTokens(tokens);
+      logger.info('注入上下文 Token: ${tokens.length} 个');
+      responsePort.send(_IsolateMessage(_MessageType.injectContextTokensResult, {'success': true}));
+    } catch (e) {
+      logger.error('注入上下文 Token 错误: $e');
       responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
     }
   }

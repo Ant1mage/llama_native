@@ -482,6 +482,51 @@ class LlamaContext {
     _logger.info('KV cache fully reset');
   }
 
+  void setKVCacheCallbacks({
+    KVCacheThresholdCallback? onNearThreshold,
+    KVCacheThresholdCallback? onEmergency,
+    KVCacheResetCallback? onFullReset,
+  }) {
+    _kvCache?.setOnNearThreshold(onNearThreshold);
+    _kvCache?.setOnEmergency(onEmergency);
+    _kvCache?.setOnFullReset(onFullReset);
+  }
+
+  bool get isKVCachePaused => _kvCache?.isPaused ?? false;
+  bool get isSnapshotInjected => _kvCache?.snapshotInjected ?? false;
+
+  void pauseKVCache() {
+    _kvCache?.pause();
+    _logger.info('KV Cache 已暂停');
+  }
+
+  void resumeKVCache() {
+    _kvCache?.resume();
+    _logger.info('KV Cache 已恢复');
+  }
+
+  void prepareForSnapshot() {
+    _kvCache?.prepareForSnapshot();
+    _logger.info('准备接收快照');
+  }
+
+  void injectContextTokens(List<int> tokens) {
+    if (_ctxPtr == null || _kvCache == null) {
+      _logger.warning('无法注入上下文: 上下文未初始化');
+      return;
+    }
+
+    _logger.info('注入上下文快照: ${tokens.length} 个 Token');
+
+    decode(tokens);
+
+    _kvCache!.injectContextAfterTruncation();
+
+    _logger.info('上下文快照注入完成');
+  }
+
+  double get kvCacheUsagePercent => _kvCache?.usagePercent ?? 0.0;
+
   void prepareSequentialPrefill() {
     _kvCache?.prepareSequentialPrefill();
     _nPast = 0;

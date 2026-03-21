@@ -6,6 +6,9 @@ import 'package:llama_native/src/engine/exceptions/llama_exceptions.dart';
 import 'package:llama_native/src/engine/context/token_generation.dart';
 
 typedef KVCacheRebuildCallback = List<int> Function(int neededTokens);
+typedef KVCacheThresholdCallback = void Function(double usagePercent);
+typedef KVCacheResetCallback = void Function();
+typedef KVCacheSnapshotCallback = Future<String?> Function(double usagePercent);
 
 class KVCacheManager {
   final Logger _logger = Logger('LlamaKVCacheManager');
@@ -16,9 +19,17 @@ class KVCacheManager {
   int? _windowSize;
   Pointer<bindings.llama_context>? _ctx;
   KVCacheRebuildCallback? _rebuildCallback;
+  KVCacheThresholdCallback? _onNearThreshold;
+  KVCacheThresholdCallback? _onEmergency;
+  KVCacheResetCallback? _onFullReset;
+  KVCacheSnapshotCallback? _onSnapshotNeeded;
+
+  bool _isPaused = false;
+  bool _snapshotInjected = false;
 
   static const double _moeBufferPercent = 0.20;
   static const double _truncationThreshold = 0.75;
+  static const double _emergencyThreshold = 0.80;
 
   int get _moeBufferSlots => (_nCtx * _moeBufferPercent).toInt();
   int get _safeCapacity => _nCtx - _moeBufferSlots;
@@ -62,6 +73,40 @@ class KVCacheManager {
     _rebuildCallback = callback;
   }
 
+  void setOnNearThreshold(KVCacheThresholdCallback? callback) {
+    _onNearThreshold = callback;
+  }
+
+  void setOnEmergency(KVCacheThresholdCallback? callback) {
+    _onEmergency = callback;
+  }
+
+  void setOnFullReset(KVCacheResetCallback? callback) {
+    _onFullReset = callback;
+  }
+
+  void setOnSnapshotNeeded(KVCacheSnapshotCallback? callback) {
+    _onSnapshotNeeded = callback;
+  }
+
+  bool get isPaused => _isPaused;
+  bool get snapshotInjected => _snapshotInjected;
+
+  void pause() {
+    _isPaused = true;
+    _logger.info('KV Cache 管理已暂停');
+  }
+
+  void resume() {
+    _isPaused = false;
+    _logger.info('KV Cache 管理已恢复');
+  }
+
+  void markSnapshotInjected() {
+    _snapshotInjected = true;
+    _logger.info('快照已注入标记');
+  }
+
   int get nPast => _logicalPos;
   int get nRemain => _nCtx - _usedCells;
   int get keepPrefix => _keepPrefix;
@@ -85,15 +130,29 @@ class KVCacheManager {
   }
 
   void _checkCacheManagement() {
+    if (_isPaused) {
+      _logger.debug('KV Cache 管理已暂停，跳过检查');
+      return;
+    }
+
+    final usage = usagePercent;
+
     if (isFull) {
-      _logger.warning('KV缓存已满: $_usedCells/$_nCtx (${usagePercent.toStringAsFixed(1)}%)');
+      _logger.warning('KV缓存已满: $_usedCells/$_nCtx (${usage.toStringAsFixed(1)}%)');
       _handleFullCache();
     } else if (isOverSafeThreshold) {
-      _logger.warning('KV缓存超过安全阈值: $_usedCells/$_nCtx (${usagePercent.toStringAsFixed(1)}%)');
+      _logger.warning('KV缓存超过安全阈值: $_usedCells/$_nCtx (${usage.toStringAsFixed(1)}%)');
+      _onEmergency?.call(usage);
       _handleOverThreshold();
     } else if (needsTruncation) {
-      _logger.info('KV缓存接近阈值: $_usedCells/$_nCtx (${usagePercent.toStringAsFixed(1)}%)');
-      _autoTruncate();
+      _logger.info('KV缓存接近阈值: $_usedCells/$_nCtx (${usage.toStringAsFixed(1)}%)');
+      _onNearThreshold?.call(usage);
+      if (!_snapshotInjected) {
+        _logger.info('等待快照注入后再截断...');
+        pause();
+      } else {
+        _autoTruncate();
+      }
     } else if (_windowSize != null && _usedCells > _windowSize!) {
       _logger.debug('触发滑动窗口');
       _applySlidingWindow();
@@ -331,11 +390,26 @@ class KVCacheManager {
 
       _logicalPos = 0;
 
+      _onFullReset?.call();
+
       _logger.info('KV缓存已完全重置: 已用=$_usedCells, 逻辑位置=$_logicalPos');
     } catch (e) {
       _logger.error('完全重置时出错: $e');
       _logicalPos = 0;
     }
+  }
+
+  void injectContextAfterTruncation() {
+    _logger.info('注入上下文快照后恢复管理');
+    _snapshotInjected = true;
+    _isPaused = false;
+    _autoTruncate();
+    _logger.info('上下文注入完成，管理已恢复');
+  }
+
+  void prepareForSnapshot() {
+    _logger.info('准备接收快照注入');
+    _snapshotInjected = false;
   }
 
   void prepareSequentialPrefill() {
