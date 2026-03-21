@@ -379,6 +379,24 @@ class LlamaIsolate {
     return completer.future;
   }
 
+  Future<void> prepareForSnapshot() async {
+    if (!_isModelLoaded || _sendPort == null) return;
+
+    final completer = Completer<void>();
+    final responsePort = ReceivePort();
+
+    _sendPort!.send(_IsolateMessage(_MessageType.prepareForSnapshot, {'responsePort': responsePort.sendPort}));
+
+    responsePort.listen((message) {
+      if (message is _IsolateMessage && message.type == _MessageType.prepareForSnapshotResult) {
+        completer.complete();
+        responsePort.close();
+      }
+    });
+
+    return completer.future;
+  }
+
   Future<void> injectContextTokens(List<int> tokens) async {
     if (!_isModelLoaded || _sendPort == null) return;
 
@@ -508,6 +526,10 @@ class LlamaIsolate {
             _handleResumeKVCache(message.data, context, logger);
             break;
 
+          case _MessageType.prepareForSnapshot:
+            _handlePrepareForSnapshot(message.data, context, logger);
+            break;
+
           case _MessageType.injectContextTokens:
             _handleInjectContextTokens(message.data, context, logger);
             break;
@@ -608,7 +630,7 @@ class LlamaIsolate {
 
         final token = context.sample();
         final isEnd = context.isEos(token);
-        final tokenText = context.detokenizeOne(token);
+        final tokenText = context.isControl(token) ? '' : context.detokenizeOne(token);
 
         final updatedKvStatus = context.kvCacheStatus;
         responsePort.send(
@@ -796,6 +818,19 @@ class LlamaIsolate {
       responsePort.send(_IsolateMessage(_MessageType.resumeKVCacheResult, {'success': true}));
     } catch (e) {
       logger.error('恢复 KV Cache 错误: $e');
+      responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
+    }
+  }
+
+  static void _handlePrepareForSnapshot(Map<String, dynamic> data, LlamaContext? context, Logger logger) {
+    final responsePort = data['responsePort'] as SendPort;
+
+    try {
+      context?.prepareForSnapshot();
+      logger.info('已准备接收快照');
+      responsePort.send(_IsolateMessage(_MessageType.prepareForSnapshotResult, {'success': true}));
+    } catch (e) {
+      logger.error('准备快照错误: $e');
       responsePort.send(_IsolateMessage(_MessageType.error, e.toString()));
     }
   }

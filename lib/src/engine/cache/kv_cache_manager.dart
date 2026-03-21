@@ -316,6 +316,7 @@ class KVCacheManager {
   }
 
   void reset() {
+    _snapshotInjected = false;
     clear();
   }
 
@@ -389,6 +390,7 @@ class KVCacheManager {
       bindings.llama_synchronize(_ctx!);
 
       _logicalPos = 0;
+      _snapshotInjected = false;
 
       _onFullReset?.call();
 
@@ -401,9 +403,8 @@ class KVCacheManager {
 
   void injectContextAfterTruncation() {
     _logger.info('注入上下文快照后恢复管理');
-    _snapshotInjected = true;
     _isPaused = false;
-    _autoTruncate();
+    _snapshotInjected = true;
     _logger.info('上下文注入完成，管理已恢复');
   }
 

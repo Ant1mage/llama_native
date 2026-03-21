@@ -1878,11 +1878,6 @@ external int _ggml_row_size(int type, int ne);
 
 int ggml_row_size(ggml_type type, int ne) => _ggml_row_size(type.value, ne);
 
-@ffi.Native<ffi.Double Function(ffi.UnsignedInt)>(symbol: 'ggml_type_sizef')
-external double _ggml_type_sizef(int type);
-
-double ggml_type_sizef(ggml_type type) => _ggml_type_sizef(type.value);
-
 @ffi.Native<ffi.Pointer<ffi.Char> Function(ffi.UnsignedInt)>(
   symbol: 'ggml_type_name',
 )

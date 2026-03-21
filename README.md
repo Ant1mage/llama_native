@@ -126,6 +126,7 @@ await engine.injectContextTokens(tokens);
 | `setKVCacheCallbacks(...)` | 设置阈值回调 |
 | `pauseKVCache()` | 暂停 KV Cache 管理 |
 | `resumeKVCache()` | 恢复 KV Cache 管理 |
+| `prepareForSnapshot()` | 准备接收快照注入 |
 | `injectContextText(text)` | 注入文本到 KV Cache |
 | `injectContextTokens(tokens)` | 注入 Token 到 KV Cache |
 

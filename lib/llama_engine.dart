@@ -131,10 +131,11 @@ class LlamaEngine {
     return _isolate!.generate(tokens, maxTokens: maxTokens).map((gen) {
       _lastKvUsagePercent = gen.kvUsagePercent;
 
-      if (gen.kvUsagePercent >= 80 && _onEmergency != null) {
-        _onEmergency!(gen.kvUsagePercent);
-      } else if (gen.kvUsagePercent >= 75 && _onNearThreshold != null) {
-        _onNearThreshold!(gen.kvUsagePercent);
+      if (gen.kvUsagePercent >= 80) {
+        _onEmergency?.call(gen.kvUsagePercent);
+      }
+      if (gen.kvUsagePercent >= 75) {
+        _onNearThreshold?.call(gen.kvUsagePercent);
       }
 
       return gen;
@@ -178,6 +179,13 @@ class LlamaEngine {
     if (_isolate != null && _isolate!.isModelLoaded) {
       _logger.debug('设置保留前缀Token: ${tokens.length}个');
       await _isolate!.setKeepPrefixTokens(tokens);
+    }
+  }
+
+  Future<void> prepareForSnapshot() async {
+    if (_isolate != null && _isolate!.isModelLoaded) {
+      _logger.info('准备快照，暂停 KV Cache 管理');
+      await _isolate!.prepareForSnapshot();
     }
   }
 

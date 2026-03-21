@@ -389,6 +389,10 @@ class LlamaContext {
     return bindings.llama_token_is_eog(_model.vocab, token);
   }
 
+  bool isControl(int token) {
+    return bindings.llama_token_is_control(_model.vocab, token);
+  }
+
   String detokenizeOne(int token) {
     var bufferSize = bindings.llama_token_to_piece(_model.vocab, token, nullptr, 0, 0, true);
 
